@@ -12,7 +12,8 @@ function makeRoomCode() {
 }
 
 function App() {
-  const [roomCode, setRoomCode] = useState("");
+  const [createdRoomCode, setCreatedRoomCode] = useState("");
+  const [joinCode, setJoinCode] = useState("");
   const [message, setMessage] = useState("");
 
   async function createRoom() {
@@ -31,8 +32,32 @@ function App() {
       return;
     }
 
-    setRoomCode(code);
+    setCreatedRoomCode(code);
     setMessage("Room created!");
+  }
+
+  async function joinRoom() {
+    const code = joinCode.trim().toUpperCase();
+
+    if (!code) {
+      setMessage("Enter a room code first.");
+      return;
+    }
+
+    setMessage("Looking for room...");
+
+    const { data, error } = await supabase
+      .from("rooms")
+      .select("*")
+      .eq("code", code)
+      .single();
+
+    if (error || !data) {
+      setMessage("Room not found.");
+      return;
+    }
+
+    setMessage(`Joined room ${data.code}!`);
   }
 
   return (
@@ -46,13 +71,29 @@ function App() {
           Create Room
         </button>
 
-        {message && <p>{message}</p>}
-
-        {roomCode && (
+        {createdRoomCode && (
           <h2>
-            Room Code: <span style={{ color: "#facc15" }}>{roomCode}</span>
+            Room Code:{" "}
+            <span style={{ color: "#facc15" }}>{createdRoomCode}</span>
           </h2>
         )}
+
+        <hr style={{ margin: "30px 0", borderColor: "#374151" }} />
+
+        <h2>Join a Room</h2>
+
+        <input
+          value={joinCode}
+          onChange={(e) => setJoinCode(e.target.value)}
+          placeholder="Enter room code"
+          style={inputStyle}
+        />
+
+        <button onClick={joinRoom} style={buttonStyle}>
+          Join Room
+        </button>
+
+        {message && <p>{message}</p>}
       </div>
     </div>
   );
@@ -81,7 +122,17 @@ const buttonStyle = {
   borderRadius: "10px",
   border: "none",
   cursor: "pointer",
-  fontWeight: "bold"
+  fontWeight: "bold",
+  margin: "10px"
+};
+
+const inputStyle = {
+  width: "80%",
+  padding: "12px",
+  borderRadius: "10px",
+  border: "1px solid #374151",
+  marginBottom: "10px",
+  textTransform: "uppercase"
 };
 
 ReactDOM.createRoot(document.getElementById("root")).render(

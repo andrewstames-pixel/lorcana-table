@@ -252,17 +252,23 @@ function App() {
           </h2>
 
           <div style={playersGridStyle}>
-            {playerList.map(([id, player]) => (
-              <div key={id} style={seatStyle}>
-                <h3>{player.username}</h3>
-                <p>Lore: {player.lore}</p>
-                <p>Hand: {id === playerId ? player.hand.length : "Hidden"}</p>
-                <p>Board: {player.board.length}</p>
-                <p>Inkwell: {player.inkwell.length}</p>
-                <p>Discard: {player.discard.length}</p>
-              </div>
-            ))}
-          </div>
+  {playerList.map(([id, player]) => (
+    <div key={id} style={seatStyle}>
+      <h3>{player.username}</h3>
+      <p>Lore: {player.lore}</p>
+      <p>Hand: {id === playerId ? player.hand.length : `${player.hand.length} hidden card(s)`}</p>
+
+      <h4>Board</h4>
+      <MiniCards cards={player.board} />
+
+      <h4>Inkwell</h4>
+      <MiniCards cards={player.inkwell} />
+
+      <h4>Discard</h4>
+      <MiniCards cards={player.discard} />
+    </div>
+  ))}
+</div>
 
           {me && (
             <>
@@ -320,7 +326,19 @@ function App() {
     </div>
   );
 }
+function MiniCards({ cards }) {
+  if (!cards.length) return <p style={{ color: "#9ca3af" }}>Empty</p>;
 
+  return (
+    <div style={miniCardRowStyle}>
+      {cards.map((card, index) => (
+        <div key={`${card}-${index}`} style={miniCardStyle}>
+          {card}
+        </div>
+      ))}
+    </div>
+  );
+}
 function Zone({ title, cards, selectedCard, setSelectedCard }) {
   return (
     <div style={zoneStyle}>
@@ -434,6 +452,26 @@ const inputStyle = {
   borderRadius: "10px",
   border: "1px solid #374151",
   marginBottom: "10px"
+};
+
+const miniCardRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "6px",
+  justifyContent: "center"
+};
+
+const miniCardStyle = {
+  width: "70px",
+  minHeight: "90px",
+  borderRadius: "8px",
+  background: "#020617",
+  border: "1px solid #374151",
+  color: "white",
+  fontSize: "11px",
+  padding: "6px",
+  display: "grid",
+  placeItems: "center"
 };
 
 ReactDOM.createRoot(document.getElementById("root")).render(

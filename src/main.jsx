@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
 
@@ -11,25 +11,71 @@ function makeRoomCode() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
+function makePlayerId() {
+  let id = localStorage.getItem("player_id");
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem("player_id", id);
+  }
+  return id;
+}
+
 function App() {
   const [username, setUsername] = useState("");
-  const [createdRoomCode, setCreatedRoomCode] = useState("");
   const [joinCode, setJoinCode] = useState("");
   const [currentRoom, setCurrentRoom] = useState(null);
+  const [players, setPlayers] = useState([]);
   const [message, setMessage] = useState("");
+  const playerId = makePlayerId();
 
-  function requireUsername() {
-    if (!username.trim()) {
-      setMessage("Enter your username first.");
-      return false;
+  async function loadPlayers(roomId) {
+    const { data, error } = await supabase
+      .from("room_seats")
+      .select("*")
+      .eq("room_id", roomId)
+      .order("seat_index");
+
+    if (!error) setPlayers(data || []);
+  }
+
+  async function claimSeat(roomId) {
+    const { data: seats } = await supabase
+      .from("room_seats")
+      .select("seat_index")
+      .eq("room_id", roomId);
+
+    const taken = new Set((seats || []).map((s) => s.seat_index));
+    const seatIndex = [...Array(8).keys()].find((i) => !taken.has(i));
+
+    if (seatIndex === undefined) {
+      setMessage("Room is full.");
+      return;
     }
-    return true;
+
+    await supabase.from("room_seats").insert({
+      room_id: roomId,
+      player_id: playerId,
+      seat_index: seatIndex,
+      lore: 0,
+      ink: 0,
+      username: username.trim()
+    });
+
+    await loadPlayers(roomId);
+  }
+
+  async function enterRoom(room) {
+    setCurrentRoom(room);
+    await claimSeat(room.id);
+    await loadPlayers(room.id);
   }
 
   async function createRoom() {
-    if (!requireUsername()) return;
+    if (!username.trim()) {
+      setMessage("Enter your username first.");
+      return;
+    }
 
-    setMessage("Creating room...");
     const code = makeRoomCode();
 
     const { data, error } = await supabase
@@ -43,22 +89,17 @@ function App() {
       return;
     }
 
-    setCreatedRoomCode(code);
-    setCurrentRoom(data);
     setMessage("Room created!");
+    await enterRoom(data);
   }
 
   async function joinRoom() {
-    if (!requireUsername()) return;
-
-    const code = joinCode.trim().toUpperCase();
-
-    if (!code) {
-      setMessage("Enter a room code first.");
+    if (!username.trim()) {
+      setMessage("Enter your username first.");
       return;
     }
 
-    setMessage("Looking for room...");
+    const code = joinCode.trim().toUpperCase();
 
     const { data, error } = await supabase
       .from("rooms")
@@ -71,18 +112,51 @@ function App() {
       return;
     }
 
-    setCurrentRoom(data);
     setMessage(`Joined room ${data.code}!`);
+    await enterRoom(data);
   }
 
-  function leaveRoom() {
+  async function leaveRoom() {
+    if (currentRoom) {
+      await supabase
+        .from("room_seats")
+        .delete()
+        .eq("room_id", currentRoom.id)
+        .eq("player_id", playerId);
+    }
+
     setCurrentRoom(null);
+    setPlayers([]);
     setJoinCode("");
     setMessage("Left room.");
   }
 
+  useEffect(() => {
+    if (!currentRoom) return;
+
+    const channel = supabase
+      .channel("room-seats-" + currentRoom.id)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "room_seats",
+          filter: `room_id=eq.${currentRoom.id}`
+        },
+        () => loadPlayers(currentRoom.id)
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentRoom]);
+
   if (currentRoom) {
-    const players = [username.trim(), "Open Seat", "Open Seat", "Open Seat", "Open Seat", "Open Seat"];
+    const seats = Array.from({ length: 8 }, (_, i) => {
+      return players.find((p) => p.seat_index === i);
+    });
 
     return (
       <div style={pageStyle}>
@@ -91,21 +165,17 @@ function App() {
           <h2>
             Room: <span style={{ color: "#facc15" }}>{currentRoom.code}</span>
           </h2>
-          <p>
-            You are playing as:{" "}
-            <strong style={{ color: "#93c5fd" }}>{username}</strong>
-          </p>
 
           <div style={tableStyle}>
-            {players.map((player, index) => (
+            {seats.map((seat, index) => (
               <div key={index} style={seatStyle}>
-                {player}
+                {seat ? seat.username : "Open Seat"}
               </div>
             ))}
 
             <div style={centerStyle}>
               <h2>Shared Table</h2>
-              <p>Cards and player boards will go here.</p>
+              <p>Players now save to Supabase.</p>
             </div>
           </div>
 
@@ -138,13 +208,6 @@ function App() {
         <button onClick={createRoom} style={buttonStyle}>
           Create Room
         </button>
-
-        {createdRoomCode && (
-          <h2>
-            Room Code:{" "}
-            <span style={{ color: "#facc15" }}>{createdRoomCode}</span>
-          </h2>
-        )}
 
         <hr style={{ margin: "30px 0", borderColor: "#374151" }} />
 
@@ -198,7 +261,7 @@ const roomPanelStyle = {
 const tableStyle = {
   marginTop: "20px",
   display: "grid",
-  gridTemplateColumns: "repeat(3, 1fr)",
+  gridTemplateColumns: "repeat(4, 1fr)",
   gap: "15px",
   alignItems: "center"
 };
@@ -211,7 +274,7 @@ const seatStyle = {
 };
 
 const centerStyle = {
-  gridColumn: "1 / 4",
+  gridColumn: "1 / 5",
   border: "2px dashed #facc15",
   borderRadius: "16px",
   padding: "50px",

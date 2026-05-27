@@ -16,13 +16,6 @@ const STARTING_HAND = [
   "Quest Again"
 ];
 
-const INITIAL_ZONES = {
-  hand: STARTING_HAND,
-  board: [],
-  inkwell: [],
-  discard: []
-};
-
 function makeRoomCode() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
@@ -36,103 +29,74 @@ function makePlayerId() {
   return id;
 }
 
+function makePlayerState(username) {
+  return {
+    username,
+    lore: 0,
+    hand: [...STARTING_HAND],
+    board: [],
+    inkwell: [],
+    discard: []
+  };
+}
+
 function App() {
+  const playerId = makePlayerId();
+
   const [username, setUsername] = useState("");
   const [joinCode, setJoinCode] = useState("");
   const [currentRoom, setCurrentRoom] = useState(null);
-  const [players, setPlayers] = useState([]);
-  const [message, setMessage] = useState("");
+  const [players, setPlayers] = useState({});
   const [selectedCard, setSelectedCard] = useState(null);
-  const [zones, setZones] = useState(INITIAL_ZONES);
+  const [message, setMessage] = useState("");
 
-  const playerId = makePlayerId();
+  async function savePlayers(nextPlayers) {
+    if (!currentRoom) return;
 
-  async function loadPlayers(roomId) {
-    const { data, error } = await supabase
-      .from("room_seats")
-      .select("*")
-      .eq("room_id", roomId)
-      .order("seat_index");
-
-    if (!error) setPlayers(data || []);
+    await supabase.from("game_state").upsert({
+      room_id: currentRoom.id,
+      state: { players: nextPlayers },
+      updated_at: new Date().toISOString()
+    });
   }
 
   async function loadGameState(roomId) {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("game_state")
       .select("*")
       .eq("room_id", roomId)
-      .single();
-
-    if (error || !data) {
-      await supabase.from("game_state").insert({
-        room_id: roomId,
-        state: { zones: INITIAL_ZONES }
-      });
-      setZones(INITIAL_ZONES);
-      return;
-    }
-
-    if (data.state?.zones) {
-      setZones(data.state.zones);
-    }
-  }
-
-  async function saveGameState(nextZones) {
-    if (!currentRoom) return;
-
-    await supabase
-      .from("game_state")
-      .upsert({
-        room_id: currentRoom.id,
-        state: { zones: nextZones },
-        updated_at: new Date().toISOString()
-      });
-  }
-
-  async function claimSeat(roomId) {
-    const { data: existingSeat } = await supabase
-      .from("room_seats")
-      .select("*")
-      .eq("room_id", roomId)
-      .eq("player_id", playerId)
       .maybeSingle();
 
-    if (existingSeat) {
-      await loadPlayers(roomId);
-      return;
+    if (data?.state?.players) {
+      setPlayers(data.state.players);
     }
-
-    const { data: seats } = await supabase
-      .from("room_seats")
-      .select("seat_index")
-      .eq("room_id", roomId);
-
-    const taken = new Set((seats || []).map((s) => s.seat_index));
-    const seatIndex = [...Array(8).keys()].find((i) => !taken.has(i));
-
-    if (seatIndex === undefined) {
-      setMessage("Room is full.");
-      return;
-    }
-
-    await supabase.from("room_seats").insert({
-      room_id: roomId,
-      player_id: playerId,
-      seat_index: seatIndex,
-      lore: 0,
-      ink: 0,
-      username: username.trim()
-    });
-
-    await loadPlayers(roomId);
   }
 
   async function enterRoom(room) {
     setCurrentRoom(room);
-    await claimSeat(room.id);
-    await loadPlayers(room.id);
-    await loadGameState(room.id);
+
+    const { data } = await supabase
+      .from("game_state")
+      .select("*")
+      .eq("room_id", room.id)
+      .maybeSingle();
+
+    let nextPlayers = data?.state?.players || {};
+
+    if (!nextPlayers[playerId]) {
+      nextPlayers = {
+        ...nextPlayers,
+        [playerId]: makePlayerState(username.trim())
+      };
+
+      await supabase.from("game_state").upsert({
+        room_id: room.id,
+        state: { players: nextPlayers },
+        updated_at: new Date().toISOString()
+      });
+    }
+
+    setPlayers(nextPlayers);
   }
 
   async function createRoom() {
@@ -156,7 +120,11 @@ function App() {
 
     await supabase.from("game_state").insert({
       room_id: data.id,
-      state: { zones: INITIAL_ZONES }
+      state: {
+        players: {
+          [playerId]: makePlayerState(username.trim())
+        }
+      }
     });
 
     setMessage("Room created!");
@@ -188,61 +156,70 @@ function App() {
 
   async function leaveRoom() {
     if (currentRoom) {
-      await supabase
-        .from("room_seats")
-        .delete()
-        .eq("room_id", currentRoom.id)
-        .eq("player_id", playerId);
+      const nextPlayers = { ...players };
+      delete nextPlayers[playerId];
+      await savePlayers(nextPlayers);
     }
 
     setCurrentRoom(null);
-    setPlayers([]);
-    setJoinCode("");
+    setPlayers({});
     setSelectedCard(null);
-    setZones(INITIAL_ZONES);
-    setMessage("Left room.");
+    setJoinCode("");
   }
 
   async function moveSelectedCard(targetZone) {
     if (!selectedCard) {
-      setMessage("Click a card first.");
+      setMessage("Click one of your cards first.");
       return;
     }
 
-    const nextZones = {
-      hand: zones.hand.filter((card) => card !== selectedCard),
-      board: zones.board.filter((card) => card !== selectedCard),
-      inkwell: zones.inkwell.filter((card) => card !== selectedCard),
-      discard: zones.discard.filter((card) => card !== selectedCard)
+    const me = players[playerId];
+    if (!me) return;
+
+    const nextMe = {
+      ...me,
+      hand: me.hand.filter((c) => c !== selectedCard),
+      board: me.board.filter((c) => c !== selectedCard),
+      inkwell: me.inkwell.filter((c) => c !== selectedCard),
+      discard: me.discard.filter((c) => c !== selectedCard)
     };
 
-    nextZones[targetZone] = [...nextZones[targetZone], selectedCard];
+    nextMe[targetZone] = [...nextMe[targetZone], selectedCard];
 
-    setZones(nextZones);
-    await saveGameState(nextZones);
+    const nextPlayers = {
+      ...players,
+      [playerId]: nextMe
+    };
+
+    setPlayers(nextPlayers);
+    await savePlayers(nextPlayers);
 
     setMessage(`${selectedCard} moved to ${targetZone}.`);
     setSelectedCard(null);
   }
 
+  async function changeLore(amount) {
+    const me = players[playerId];
+    if (!me) return;
+
+    const nextPlayers = {
+      ...players,
+      [playerId]: {
+        ...me,
+        lore: Math.max(0, me.lore + amount)
+      }
+    };
+
+    setPlayers(nextPlayers);
+    await savePlayers(nextPlayers);
+  }
+
   useEffect(() => {
     if (!currentRoom) return;
 
-    const seatsChannel = supabase
-      .channel("room-seats-" + currentRoom.id)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "room_seats",
-          filter: `room_id=eq.${currentRoom.id}`
-        },
-        () => loadPlayers(currentRoom.id)
-      )
-      .subscribe();
+    loadGameState(currentRoom.id);
 
-    const gameChannel = supabase
+    const channel = supabase
       .channel("game-state-" + currentRoom.id)
       .on(
         "postgres_changes",
@@ -253,22 +230,18 @@ function App() {
           filter: `room_id=eq.${currentRoom.id}`
         },
         (payload) => {
-          const nextZones = payload.new?.state?.zones;
-          if (nextZones) setZones(nextZones);
+          const nextPlayers = payload.new?.state?.players;
+          if (nextPlayers) setPlayers(nextPlayers);
         }
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(seatsChannel);
-      supabase.removeChannel(gameChannel);
-    };
+    return () => supabase.removeChannel(channel);
   }, [currentRoom]);
 
   if (currentRoom) {
-    const seats = Array.from({ length: 8 }, (_, i) =>
-      players.find((p) => p.seat_index === i)
-    );
+    const me = players[playerId];
+    const playerList = Object.entries(players);
 
     return (
       <div style={pageStyle}>
@@ -278,47 +251,46 @@ function App() {
             Room: <span style={{ color: "#facc15" }}>{currentRoom.code}</span>
           </h2>
 
-          <div style={tableStyle}>
-            {seats.map((seat, index) => (
-              <div key={index} style={seatStyle}>
-                {seat ? seat.username : "Open Seat"}
+          <div style={playersGridStyle}>
+            {playerList.map(([id, player]) => (
+              <div key={id} style={seatStyle}>
+                <h3>{player.username}</h3>
+                <p>Lore: {player.lore}</p>
+                <p>Hand: {id === playerId ? player.hand.length : "Hidden"}</p>
+                <p>Board: {player.board.length}</p>
+                <p>Inkwell: {player.inkwell.length}</p>
+                <p>Discard: {player.discard.length}</p>
               </div>
             ))}
           </div>
 
-          <div style={gameAreaStyle}>
-            <Zone title="Hand" cards={zones.hand} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
-            <Zone title="Board" cards={zones.board} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
-            <Zone title="Inkwell" cards={zones.inkwell} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
-            <Zone title="Discard" cards={zones.discard} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
-          </div>
+          {me && (
+            <>
+              <div style={gameAreaStyle}>
+                <Zone title="Your Hand" cards={me.hand} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
+                <Zone title="Your Board" cards={me.board} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
+                <Zone title="Your Inkwell" cards={me.inkwell} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
+                <Zone title="Your Discard" cards={me.discard} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
+              </div>
 
-          <div>
-            <button onClick={() => moveSelectedCard("board")} style={buttonStyle}>
-              Move to Board
-            </button>
-            <button onClick={() => moveSelectedCard("inkwell")} style={buttonStyle}>
-              Move to Inkwell
-            </button>
-            <button onClick={() => moveSelectedCard("discard")} style={buttonStyle}>
-              Move to Discard
-            </button>
-            <button onClick={() => moveSelectedCard("hand")} style={buttonStyle}>
-              Return to Hand
-            </button>
-          </div>
+              <div>
+                <button onClick={() => moveSelectedCard("board")} style={buttonStyle}>Move to Board</button>
+                <button onClick={() => moveSelectedCard("inkwell")} style={buttonStyle}>Move to Inkwell</button>
+                <button onClick={() => moveSelectedCard("discard")} style={buttonStyle}>Move to Discard</button>
+                <button onClick={() => moveSelectedCard("hand")} style={buttonStyle}>Return to Hand</button>
+              </div>
 
-          {selectedCard && (
-            <p>
-              Selected: <strong style={{ color: "#facc15" }}>{selectedCard}</strong>
-            </p>
+              <div>
+                <button onClick={() => changeLore(-1)} style={buttonStyle}>- Lore</button>
+                <button onClick={() => changeLore(1)} style={buttonStyle}>+ Lore</button>
+              </div>
+            </>
           )}
 
+          {selectedCard && <p>Selected: <strong style={{ color: "#facc15" }}>{selectedCard}</strong></p>}
           {message && <p>{message}</p>}
 
-          <button onClick={leaveRoom} style={buttonStyle}>
-            Leave Room
-          </button>
+          <button onClick={leaveRoom} style={buttonStyle}>Leave Room</button>
         </div>
       </div>
     );
@@ -330,36 +302,18 @@ function App() {
 
       <div style={panelStyle}>
         <h2>Your Name</h2>
-
-        <input
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          placeholder="Enter username"
-          style={inputStyle}
-        />
+        <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Enter username" style={inputStyle} />
 
         <hr style={{ margin: "30px 0", borderColor: "#374151" }} />
 
         <h2>Create a Room</h2>
-
-        <button onClick={createRoom} style={buttonStyle}>
-          Create Room
-        </button>
+        <button onClick={createRoom} style={buttonStyle}>Create Room</button>
 
         <hr style={{ margin: "30px 0", borderColor: "#374151" }} />
 
         <h2>Join a Room</h2>
-
-        <input
-          value={joinCode}
-          onChange={(e) => setJoinCode(e.target.value)}
-          placeholder="Enter room code"
-          style={inputStyle}
-        />
-
-        <button onClick={joinRoom} style={buttonStyle}>
-          Join Room
-        </button>
+        <input value={joinCode} onChange={(e) => setJoinCode(e.target.value)} placeholder="Enter room code" style={inputStyle} />
+        <button onClick={joinRoom} style={buttonStyle}>Join Room</button>
 
         {message && <p>{message}</p>}
       </div>
@@ -374,16 +328,13 @@ function Zone({ title, cards, selectedCard, setSelectedCard }) {
       <p>{cards.length} card(s)</p>
 
       <div style={cardRowStyle}>
-        {cards.map((card) => (
+        {cards.map((card, index) => (
           <button
-            key={card}
+            key={`${card}-${index}`}
             onClick={() => setSelectedCard(card)}
             style={{
               ...cardStyle,
-              border:
-                selectedCard === card
-                  ? "3px solid #facc15"
-                  : "1px solid #374151"
+              border: selectedCard === card ? "3px solid #facc15" : "1px solid #374151"
             }}
           >
             {card}
@@ -414,7 +365,7 @@ const panelStyle = {
 };
 
 const roomPanelStyle = {
-  width: "min(95vw, 1100px)",
+  width: "min(95vw, 1200px)",
   border: "1px solid #374151",
   borderRadius: "16px",
   padding: "24px",
@@ -422,12 +373,11 @@ const roomPanelStyle = {
   textAlign: "center"
 };
 
-const tableStyle = {
-  marginTop: "20px",
+const playersGridStyle = {
   display: "grid",
-  gridTemplateColumns: "repeat(4, 1fr)",
-  gap: "15px",
-  alignItems: "center"
+  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+  gap: "12px",
+  marginTop: "20px"
 };
 
 const seatStyle = {

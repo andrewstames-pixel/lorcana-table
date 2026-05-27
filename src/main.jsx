@@ -14,18 +14,18 @@ function makeRoomCode() {
 function App() {
   const [createdRoomCode, setCreatedRoomCode] = useState("");
   const [joinCode, setJoinCode] = useState("");
+  const [currentRoom, setCurrentRoom] = useState(null);
   const [message, setMessage] = useState("");
 
   async function createRoom() {
     setMessage("Creating room...");
-
     const code = makeRoomCode();
 
-    const { error } = await supabase.from("rooms").insert({
-      code,
-      max_players: 8,
-      status: "lobby"
-    });
+    const { data, error } = await supabase
+      .from("rooms")
+      .insert({ code, max_players: 8, status: "lobby" })
+      .select()
+      .single();
 
     if (error) {
       setMessage("Error: " + error.message);
@@ -33,6 +33,7 @@ function App() {
     }
 
     setCreatedRoomCode(code);
+    setCurrentRoom(data);
     setMessage("Room created!");
   }
 
@@ -57,7 +58,46 @@ function App() {
       return;
     }
 
+    setCurrentRoom(data);
     setMessage(`Joined room ${data.code}!`);
+  }
+
+  function leaveRoom() {
+    setCurrentRoom(null);
+    setJoinCode("");
+    setMessage("Left room.");
+  }
+
+  if (currentRoom) {
+    return (
+      <div style={pageStyle}>
+        <div style={roomPanelStyle}>
+          <h1>Lorcana Table 🎴</h1>
+          <h2>
+            Room: <span style={{ color: "#facc15" }}>{currentRoom.code}</span>
+          </h2>
+
+          <div style={tableStyle}>
+            <div style={seatStyle}>Player 1</div>
+            <div style={seatStyle}>Player 2</div>
+            <div style={seatStyle}>Player 3</div>
+
+            <div style={centerStyle}>
+              <h2>Shared Table</h2>
+              <p>Cards and player boards will go here.</p>
+            </div>
+
+            <div style={seatStyle}>Player 4</div>
+            <div style={seatStyle}>Player 5</div>
+            <div style={seatStyle}>Player 6</div>
+          </div>
+
+          <button onClick={leaveRoom} style={buttonStyle}>
+            Leave Room
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -105,7 +145,8 @@ const pageStyle = {
   color: "white",
   display: "grid",
   placeItems: "center",
-  fontFamily: "Arial, sans-serif"
+  fontFamily: "Arial, sans-serif",
+  padding: "20px"
 };
 
 const panelStyle = {
@@ -115,6 +156,38 @@ const panelStyle = {
   padding: "24px",
   background: "#111827",
   textAlign: "center"
+};
+
+const roomPanelStyle = {
+  width: "min(95vw, 1000px)",
+  border: "1px solid #374151",
+  borderRadius: "16px",
+  padding: "24px",
+  background: "#111827",
+  textAlign: "center"
+};
+
+const tableStyle = {
+  marginTop: "20px",
+  display: "grid",
+  gridTemplateColumns: "repeat(3, 1fr)",
+  gap: "15px",
+  alignItems: "center"
+};
+
+const seatStyle = {
+  border: "1px solid #374151",
+  borderRadius: "12px",
+  padding: "20px",
+  background: "#1f2937"
+};
+
+const centerStyle = {
+  gridColumn: "1 / 4",
+  border: "2px dashed #facc15",
+  borderRadius: "16px",
+  padding: "50px",
+  background: "#020617"
 };
 
 const buttonStyle = {

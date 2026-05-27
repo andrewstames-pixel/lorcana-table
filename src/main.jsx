@@ -36,7 +36,8 @@ function makePlayerState(username) {
     hand: [...STARTING_HAND],
     board: [],
     inkwell: [],
-    discard: []
+    discard: [],
+    exerted: []
   };
 }
 
@@ -58,18 +59,6 @@ function App() {
       state: { players: nextPlayers },
       updated_at: new Date().toISOString()
     });
-  }
-
-  async function loadGameState(roomId) {
-    const { data } = await supabase
-      .from("game_state")
-      .select("*")
-      .eq("room_id", roomId)
-      .maybeSingle();
-
-    if (data?.state?.players) {
-      setPlayers(data.state.players);
-    }
   }
 
   async function enterRoom(room) {
@@ -127,7 +116,6 @@ function App() {
       }
     });
 
-    setMessage("Room created!");
     await enterRoom(data);
   }
 
@@ -150,7 +138,6 @@ function App() {
       return;
     }
 
-    setMessage(`Joined room ${data.code}!`);
     await enterRoom(data);
   }
 
@@ -181,7 +168,8 @@ function App() {
       hand: me.hand.filter((c) => c !== selectedCard),
       board: me.board.filter((c) => c !== selectedCard),
       inkwell: me.inkwell.filter((c) => c !== selectedCard),
-      discard: me.discard.filter((c) => c !== selectedCard)
+      discard: me.discard.filter((c) => c !== selectedCard),
+      exerted: me.exerted || []
     };
 
     nextMe[targetZone] = [...nextMe[targetZone], selectedCard];
@@ -193,9 +181,28 @@ function App() {
 
     setPlayers(nextPlayers);
     await savePlayers(nextPlayers);
-
-    setMessage(`${selectedCard} moved to ${targetZone}.`);
     setSelectedCard(null);
+  }
+
+  async function toggleExert(card) {
+    const me = players[playerId];
+    if (!me) return;
+
+    const exerted = me.exerted || [];
+    const nextExerted = exerted.includes(card)
+      ? exerted.filter((c) => c !== card)
+      : [...exerted, card];
+
+    const nextPlayers = {
+      ...players,
+      [playerId]: {
+        ...me,
+        exerted: nextExerted
+      }
+    };
+
+    setPlayers(nextPlayers);
+    await savePlayers(nextPlayers);
   }
 
   async function changeLore(amount) {
@@ -216,8 +223,6 @@ function App() {
 
   useEffect(() => {
     if (!currentRoom) return;
-
-    loadGameState(currentRoom.id);
 
     const channel = supabase
       .channel("game-state-" + currentRoom.id)
@@ -252,29 +257,34 @@ function App() {
           </h2>
 
           <div style={playersGridStyle}>
-  {playerList.map(([id, player]) => (
-    <div key={id} style={seatStyle}>
-      <h3>{player.username}</h3>
-      <p>Lore: {player.lore}</p>
-      <p>Hand: {id === playerId ? player.hand.length : `${player.hand.length} hidden card(s)`}</p>
+            {playerList.map(([id, player]) => (
+              <div key={id} style={seatStyle}>
+                <h3>{player.username}</h3>
+                <p>Lore: {player.lore}</p>
+                <p>
+                  Hand:{" "}
+                  {id === playerId
+                    ? player.hand.length
+                    : `${player.hand.length} hidden card(s)`}
+                </p>
 
-      <h4>Board</h4>
-      <MiniCards cards={player.board} />
+                <h4>Board</h4>
+                <MiniCards cards={player.board} exertedCards={player.exerted || []} />
 
-      <h4>Inkwell</h4>
-      <MiniCards cards={player.inkwell} />
+                <h4>Inkwell</h4>
+                <MiniCards cards={player.inkwell} />
 
-      <h4>Discard</h4>
-      <MiniCards cards={player.discard} />
-    </div>
-  ))}
-</div>
+                <h4>Discard</h4>
+                <MiniCards cards={player.discard} />
+              </div>
+            ))}
+          </div>
 
           {me && (
             <>
               <div style={gameAreaStyle}>
                 <Zone title="Your Hand" cards={me.hand} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
-                <Zone title="Your Board" cards={me.board} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
+                <Zone title="Your Board" cards={me.board} selectedCard={selectedCard} setSelectedCard={setSelectedCard} exertedCards={me.exerted || []} onDoubleClickCard={toggleExert} />
                 <Zone title="Your Inkwell" cards={me.inkwell} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
                 <Zone title="Your Discard" cards={me.discard} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
               </div>
@@ -326,20 +336,28 @@ function App() {
     </div>
   );
 }
-function MiniCards({ cards }) {
+
+function MiniCards({ cards, exertedCards = [] }) {
   if (!cards.length) return <p style={{ color: "#9ca3af" }}>Empty</p>;
 
   return (
     <div style={miniCardRowStyle}>
       {cards.map((card, index) => (
-        <div key={`${card}-${index}`} style={miniCardStyle}>
+        <div
+          key={`${card}-${index}`}
+          style={{
+            ...miniCardStyle,
+            transform: exertedCards.includes(card) ? "rotate(90deg)" : "none"
+          }}
+        >
           {card}
         </div>
       ))}
     </div>
   );
 }
-function Zone({ title, cards, selectedCard, setSelectedCard }) {
+
+function Zone({ title, cards, selectedCard, setSelectedCard, exertedCards = [], onDoubleClickCard }) {
   return (
     <div style={zoneStyle}>
       <h2>{title}</h2>
@@ -350,9 +368,11 @@ function Zone({ title, cards, selectedCard, setSelectedCard }) {
           <button
             key={`${card}-${index}`}
             onClick={() => setSelectedCard(card)}
+            onDoubleClick={() => onDoubleClickCard?.(card)}
             style={{
               ...cardStyle,
-              border: selectedCard === card ? "3px solid #facc15" : "1px solid #374151"
+              border: selectedCard === card ? "3px solid #facc15" : "1px solid #374151",
+              transform: exertedCards.includes(card) ? "rotate(90deg)" : "none"
             }}
           >
             {card}
@@ -393,7 +413,7 @@ const roomPanelStyle = {
 
 const playersGridStyle = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
   gap: "12px",
   marginTop: "20px"
 };
@@ -437,23 +457,6 @@ const cardStyle = {
   padding: "10px"
 };
 
-const buttonStyle = {
-  padding: "12px 20px",
-  borderRadius: "10px",
-  border: "none",
-  cursor: "pointer",
-  fontWeight: "bold",
-  margin: "10px"
-};
-
-const inputStyle = {
-  width: "80%",
-  padding: "12px",
-  borderRadius: "10px",
-  border: "1px solid #374151",
-  marginBottom: "10px"
-};
-
 const miniCardRowStyle = {
   display: "flex",
   flexWrap: "wrap",
@@ -472,6 +475,23 @@ const miniCardStyle = {
   padding: "6px",
   display: "grid",
   placeItems: "center"
+};
+
+const buttonStyle = {
+  padding: "12px 20px",
+  borderRadius: "10px",
+  border: "none",
+  cursor: "pointer",
+  fontWeight: "bold",
+  margin: "10px"
+};
+
+const inputStyle = {
+  width: "80%",
+  padding: "12px",
+  borderRadius: "10px",
+  border: "1px solid #374151",
+  marginBottom: "10px"
 };
 
 ReactDOM.createRoot(document.getElementById("root")).render(

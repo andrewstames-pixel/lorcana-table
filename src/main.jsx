@@ -204,7 +204,21 @@ function App() {
     setPlayers(nextPlayers);
     await savePlayers(nextPlayers);
   }
+async function readyAllCards() {
+  const me = players[playerId];
+  if (!me) return;
 
+  const nextPlayers = {
+    ...players,
+    [playerId]: {
+      ...me,
+      exerted: []
+    }
+  };
+
+  setPlayers(nextPlayers);
+  await savePlayers(nextPlayers);
+}
   async function changeLore(amount) {
     const me = players[playerId];
     if (!me) return;
@@ -301,6 +315,7 @@ function App() {
               <div>
                 <button onClick={() => changeLore(-1)} style={buttonStyle}>- Lore</button>
                 <button onClick={() => changeLore(1)} style={buttonStyle}>+ Lore</button>
+                <button onClick={readyAllCards} style={buttonStyle}>Ready All</button>
               </div>
             </>
           )}

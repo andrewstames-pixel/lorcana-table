@@ -314,9 +314,19 @@ async function readyAllCards() {
 
               <div>
                <div>
-  <button onClick={() => changeLore(-1)} style={buttonStyle}>- Lore</button>
-  <button onClick={() => changeLore(1)} style={buttonStyle}>+ Lore</button>
-  <button onClick={readyAllCards} style={buttonStyle}>Ready All</button>
+ <div>
+  <button onClick={() => changeLore(-1)} style={buttonStyle}>
+    - Lore
+  </button>
+
+  <button onClick={() => changeLore(1)} style={buttonStyle}>
+    + Lore
+  </button>
+
+  <button onClick={readyAllCards} style={buttonStyle}>
+    Ready All
+  </button>
+</div>
 </div>
             </>
           )}

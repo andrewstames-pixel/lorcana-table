@@ -16,6 +16,13 @@ const STARTING_HAND = [
   "Quest Again"
 ];
 
+const INITIAL_ZONES = {
+  hand: STARTING_HAND,
+  board: [],
+  inkwell: [],
+  discard: []
+};
+
 function makeRoomCode() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
@@ -36,13 +43,7 @@ function App() {
   const [players, setPlayers] = useState([]);
   const [message, setMessage] = useState("");
   const [selectedCard, setSelectedCard] = useState(null);
-
-  const [zones, setZones] = useState({
-    hand: STARTING_HAND,
-    board: [],
-    inkwell: [],
-    discard: []
-  });
+  const [zones, setZones] = useState(INITIAL_ZONES);
 
   const playerId = makePlayerId();
 
@@ -56,7 +57,52 @@ function App() {
     if (!error) setPlayers(data || []);
   }
 
+  async function loadGameState(roomId) {
+    const { data, error } = await supabase
+      .from("game_state")
+      .select("*")
+      .eq("room_id", roomId)
+      .single();
+
+    if (error || !data) {
+      await supabase.from("game_state").insert({
+        room_id: roomId,
+        state: { zones: INITIAL_ZONES }
+      });
+      setZones(INITIAL_ZONES);
+      return;
+    }
+
+    if (data.state?.zones) {
+      setZones(data.state.zones);
+    }
+  }
+
+  async function saveGameState(nextZones) {
+    if (!currentRoom) return;
+
+    await supabase
+      .from("game_state")
+      .upsert({
+        room_id: currentRoom.id,
+        state: { zones: nextZones },
+        updated_at: new Date().toISOString()
+      });
+  }
+
   async function claimSeat(roomId) {
+    const { data: existingSeat } = await supabase
+      .from("room_seats")
+      .select("*")
+      .eq("room_id", roomId)
+      .eq("player_id", playerId)
+      .maybeSingle();
+
+    if (existingSeat) {
+      await loadPlayers(roomId);
+      return;
+    }
+
     const { data: seats } = await supabase
       .from("room_seats")
       .select("seat_index")
@@ -86,6 +132,7 @@ function App() {
     setCurrentRoom(room);
     await claimSeat(room.id);
     await loadPlayers(room.id);
+    await loadGameState(room.id);
   }
 
   async function createRoom() {
@@ -106,6 +153,11 @@ function App() {
       setMessage("Error: " + error.message);
       return;
     }
+
+    await supabase.from("game_state").insert({
+      room_id: data.id,
+      state: { zones: INITIAL_ZONES }
+    });
 
     setMessage("Room created!");
     await enterRoom(data);
@@ -146,26 +198,28 @@ function App() {
     setCurrentRoom(null);
     setPlayers([]);
     setJoinCode("");
+    setSelectedCard(null);
+    setZones(INITIAL_ZONES);
     setMessage("Left room.");
   }
 
-  function moveSelectedCard(targetZone) {
+  async function moveSelectedCard(targetZone) {
     if (!selectedCard) {
       setMessage("Click a card first.");
       return;
     }
 
-    setZones((oldZones) => {
-      const nextZones = {
-        hand: oldZones.hand.filter((card) => card !== selectedCard),
-        board: oldZones.board.filter((card) => card !== selectedCard),
-        inkwell: oldZones.inkwell.filter((card) => card !== selectedCard),
-        discard: oldZones.discard.filter((card) => card !== selectedCard)
-      };
+    const nextZones = {
+      hand: zones.hand.filter((card) => card !== selectedCard),
+      board: zones.board.filter((card) => card !== selectedCard),
+      inkwell: zones.inkwell.filter((card) => card !== selectedCard),
+      discard: zones.discard.filter((card) => card !== selectedCard)
+    };
 
-      nextZones[targetZone] = [...nextZones[targetZone], selectedCard];
-      return nextZones;
-    });
+    nextZones[targetZone] = [...nextZones[targetZone], selectedCard];
+
+    setZones(nextZones);
+    await saveGameState(nextZones);
 
     setMessage(`${selectedCard} moved to ${targetZone}.`);
     setSelectedCard(null);
@@ -174,7 +228,7 @@ function App() {
   useEffect(() => {
     if (!currentRoom) return;
 
-    const channel = supabase
+    const seatsChannel = supabase
       .channel("room-seats-" + currentRoom.id)
       .on(
         "postgres_changes",
@@ -188,8 +242,26 @@ function App() {
       )
       .subscribe();
 
+    const gameChannel = supabase
+      .channel("game-state-" + currentRoom.id)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "game_state",
+          filter: `room_id=eq.${currentRoom.id}`
+        },
+        (payload) => {
+          const nextZones = payload.new?.state?.zones;
+          if (nextZones) setZones(nextZones);
+        }
+      )
+      .subscribe();
+
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(seatsChannel);
+      supabase.removeChannel(gameChannel);
     };
   }, [currentRoom]);
 

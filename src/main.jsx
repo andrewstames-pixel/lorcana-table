@@ -7,6 +7,15 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
+const STARTING_HAND = [
+  "Brave Mouse",
+  "Snow Singer",
+  "Thorn Queen",
+  "Island Hero",
+  "Ready Stance",
+  "Quest Again"
+];
+
 function makeRoomCode() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
@@ -26,6 +35,15 @@ function App() {
   const [currentRoom, setCurrentRoom] = useState(null);
   const [players, setPlayers] = useState([]);
   const [message, setMessage] = useState("");
+  const [selectedCard, setSelectedCard] = useState(null);
+
+  const [zones, setZones] = useState({
+    hand: STARTING_HAND,
+    board: [],
+    inkwell: [],
+    discard: []
+  });
+
   const playerId = makePlayerId();
 
   async function loadPlayers(roomId) {
@@ -131,6 +149,28 @@ function App() {
     setMessage("Left room.");
   }
 
+  function moveSelectedCard(targetZone) {
+    if (!selectedCard) {
+      setMessage("Click a card first.");
+      return;
+    }
+
+    setZones((oldZones) => {
+      const nextZones = {
+        hand: oldZones.hand.filter((card) => card !== selectedCard),
+        board: oldZones.board.filter((card) => card !== selectedCard),
+        inkwell: oldZones.inkwell.filter((card) => card !== selectedCard),
+        discard: oldZones.discard.filter((card) => card !== selectedCard)
+      };
+
+      nextZones[targetZone] = [...nextZones[targetZone], selectedCard];
+      return nextZones;
+    });
+
+    setMessage(`${selectedCard} moved to ${targetZone}.`);
+    setSelectedCard(null);
+  }
+
   useEffect(() => {
     if (!currentRoom) return;
 
@@ -154,9 +194,9 @@ function App() {
   }, [currentRoom]);
 
   if (currentRoom) {
-    const seats = Array.from({ length: 8 }, (_, i) => {
-      return players.find((p) => p.seat_index === i);
-    });
+    const seats = Array.from({ length: 8 }, (_, i) =>
+      players.find((p) => p.seat_index === i)
+    );
 
     return (
       <div style={pageStyle}>
@@ -172,12 +212,37 @@ function App() {
                 {seat ? seat.username : "Open Seat"}
               </div>
             ))}
-
-            <div style={centerStyle}>
-              <h2>Shared Table</h2>
-              <p>Players now save to Supabase.</p>
-            </div>
           </div>
+
+          <div style={gameAreaStyle}>
+            <Zone title="Hand" cards={zones.hand} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
+            <Zone title="Board" cards={zones.board} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
+            <Zone title="Inkwell" cards={zones.inkwell} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
+            <Zone title="Discard" cards={zones.discard} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
+          </div>
+
+          <div>
+            <button onClick={() => moveSelectedCard("board")} style={buttonStyle}>
+              Move to Board
+            </button>
+            <button onClick={() => moveSelectedCard("inkwell")} style={buttonStyle}>
+              Move to Inkwell
+            </button>
+            <button onClick={() => moveSelectedCard("discard")} style={buttonStyle}>
+              Move to Discard
+            </button>
+            <button onClick={() => moveSelectedCard("hand")} style={buttonStyle}>
+              Return to Hand
+            </button>
+          </div>
+
+          {selectedCard && (
+            <p>
+              Selected: <strong style={{ color: "#facc15" }}>{selectedCard}</strong>
+            </p>
+          )}
+
+          {message && <p>{message}</p>}
 
           <button onClick={leaveRoom} style={buttonStyle}>
             Leave Room
@@ -230,6 +295,33 @@ function App() {
   );
 }
 
+function Zone({ title, cards, selectedCard, setSelectedCard }) {
+  return (
+    <div style={zoneStyle}>
+      <h2>{title}</h2>
+      <p>{cards.length} card(s)</p>
+
+      <div style={cardRowStyle}>
+        {cards.map((card) => (
+          <button
+            key={card}
+            onClick={() => setSelectedCard(card)}
+            style={{
+              ...cardStyle,
+              border:
+                selectedCard === card
+                  ? "3px solid #facc15"
+                  : "1px solid #374151"
+            }}
+          >
+            {card}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const pageStyle = {
   minHeight: "100vh",
   background: "#0f172a",
@@ -250,7 +342,7 @@ const panelStyle = {
 };
 
 const roomPanelStyle = {
-  width: "min(95vw, 1000px)",
+  width: "min(95vw, 1100px)",
   border: "1px solid #374151",
   borderRadius: "16px",
   padding: "24px",
@@ -269,16 +361,40 @@ const tableStyle = {
 const seatStyle = {
   border: "1px solid #374151",
   borderRadius: "12px",
-  padding: "20px",
+  padding: "15px",
   background: "#1f2937"
 };
 
-const centerStyle = {
-  gridColumn: "1 / 5",
-  border: "2px dashed #facc15",
+const gameAreaStyle = {
+  marginTop: "30px",
+  display: "grid",
+  gridTemplateColumns: "repeat(2, 1fr)",
+  gap: "20px"
+};
+
+const zoneStyle = {
+  border: "1px solid #374151",
   borderRadius: "16px",
-  padding: "50px",
-  background: "#020617"
+  padding: "16px",
+  background: "#020617",
+  minHeight: "180px"
+};
+
+const cardRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "10px",
+  justifyContent: "center"
+};
+
+const cardStyle = {
+  width: "110px",
+  minHeight: "150px",
+  borderRadius: "12px",
+  background: "#1f2937",
+  color: "white",
+  cursor: "pointer",
+  padding: "10px"
 };
 
 const buttonStyle = {

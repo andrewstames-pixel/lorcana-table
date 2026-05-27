@@ -12,12 +12,23 @@ function makeRoomCode() {
 }
 
 function App() {
+  const [username, setUsername] = useState("");
   const [createdRoomCode, setCreatedRoomCode] = useState("");
   const [joinCode, setJoinCode] = useState("");
   const [currentRoom, setCurrentRoom] = useState(null);
   const [message, setMessage] = useState("");
 
+  function requireUsername() {
+    if (!username.trim()) {
+      setMessage("Enter your username first.");
+      return false;
+    }
+    return true;
+  }
+
   async function createRoom() {
+    if (!requireUsername()) return;
+
     setMessage("Creating room...");
     const code = makeRoomCode();
 
@@ -38,6 +49,8 @@ function App() {
   }
 
   async function joinRoom() {
+    if (!requireUsername()) return;
+
     const code = joinCode.trim().toUpperCase();
 
     if (!code) {
@@ -69,6 +82,8 @@ function App() {
   }
 
   if (currentRoom) {
+    const players = [username.trim(), "Open Seat", "Open Seat", "Open Seat", "Open Seat", "Open Seat"];
+
     return (
       <div style={pageStyle}>
         <div style={roomPanelStyle}>
@@ -76,20 +91,22 @@ function App() {
           <h2>
             Room: <span style={{ color: "#facc15" }}>{currentRoom.code}</span>
           </h2>
+          <p>
+            You are playing as:{" "}
+            <strong style={{ color: "#93c5fd" }}>{username}</strong>
+          </p>
 
           <div style={tableStyle}>
-            <div style={seatStyle}>Player 1</div>
-            <div style={seatStyle}>Player 2</div>
-            <div style={seatStyle}>Player 3</div>
+            {players.map((player, index) => (
+              <div key={index} style={seatStyle}>
+                {player}
+              </div>
+            ))}
 
             <div style={centerStyle}>
               <h2>Shared Table</h2>
               <p>Cards and player boards will go here.</p>
             </div>
-
-            <div style={seatStyle}>Player 4</div>
-            <div style={seatStyle}>Player 5</div>
-            <div style={seatStyle}>Player 6</div>
           </div>
 
           <button onClick={leaveRoom} style={buttonStyle}>
@@ -105,6 +122,17 @@ function App() {
       <h1>Lorcana Table 🎴</h1>
 
       <div style={panelStyle}>
+        <h2>Your Name</h2>
+
+        <input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="Enter username"
+          style={inputStyle}
+        />
+
+        <hr style={{ margin: "30px 0", borderColor: "#374151" }} />
+
         <h2>Create a Room</h2>
 
         <button onClick={createRoom} style={buttonStyle}>
@@ -204,8 +232,7 @@ const inputStyle = {
   padding: "12px",
   borderRadius: "10px",
   border: "1px solid #374151",
-  marginBottom: "10px",
-  textTransform: "uppercase"
+  marginBottom: "10px"
 };
 
 ReactDOM.createRoot(document.getElementById("root")).render(

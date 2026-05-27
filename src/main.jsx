@@ -283,11 +283,13 @@ function App() {
           {me && (
             <>
               <div style={gameAreaStyle}>
-                <Zone title="Your Hand" cards={me.hand} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
-                <Zone title="Your Board" cards={me.board} selectedCard={selectedCard} setSelectedCard={setSelectedCard} exertedCards={me.exerted || []} onDoubleClickCard={toggleExert} />
-                <Zone title="Your Inkwell" cards={me.inkwell} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
-                <Zone title="Your Discard" cards={me.discard} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
-              </div>
+                <Zone title="Your Hand" onDropCard={handleDropCard} cards={me.hand} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
+
+<Zone title="Your Board" onDropCard={handleDropCard} cards={me.board} selectedCard={selectedCard} setSelectedCard={setSelectedCard} exertedCards={me.exerted || []} onDoubleClickCard={toggleExert} />
+
+<Zone title="Your Inkwell" onDropCard={handleDropCard} cards={me.inkwell} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
+
+<Zone title="Your Discard" onDropCard={handleDropCard} cards={me.discard} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
 
               <div>
                 <button onClick={() => moveSelectedCard("board")} style={buttonStyle}>Move to Board</button>
@@ -357,15 +359,17 @@ function MiniCards({ cards, exertedCards = [] }) {
   );
 }
 
-function Zone({ title, cards, selectedCard, setSelectedCard, exertedCards = [], onDoubleClickCard }) {
+function Zone({ title, cards, selectedCard, setSelectedCard, exertedCards = [], onDoubleClickCard, onDropCard }) {
   return (
-    <div style={zoneStyle}>
+    <div   style={zoneStyle}   onDragOver={(e) => e.preventDefault()}   onDrop={() => onDropCard?.(title)} >
       <h2>{title}</h2>
       <p>{cards.length} card(s)</p>
 
       <div style={cardRowStyle}>
         {cards.map((card, index) => (
           <button
+            draggable
+            onDragStart={() => setSelectedCard(card)}
             key={`${card}-${index}`}
             onClick={() => setSelectedCard(card)}
             onDoubleClick={() => onDoubleClickCard?.(card)}

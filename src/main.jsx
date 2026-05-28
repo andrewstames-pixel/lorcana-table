@@ -315,15 +315,25 @@ async function readyAllCards() {
               <div>
                <div>
  <div>
-  <button onClick={() => changeLore(-1)} style={buttonStyle}>
+ <div style={{ marginTop: "20px" }}>
+  <button
+    onClick={() => changeLore(-1)}
+    style={buttonStyle}
+  >
     - Lore
   </button>
 
-  <button onClick={() => changeLore(1)} style={buttonStyle}>
+  <button
+    onClick={() => changeLore(1)}
+    style={buttonStyle}
+  >
     + Lore
   </button>
 
-  <button onClick={readyAllCards} style={buttonStyle}>
+  <button
+    onClick={readyAllCards}
+    style={buttonStyle}
+  >
     Ready All
   </button>
 </div>

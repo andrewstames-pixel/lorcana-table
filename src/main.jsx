@@ -18,85 +18,57 @@ const PLAYER_COLORS = [
   { name: "White", value: "#e5e7eb", emoji: "⚪" }
 ];
 
-const DEFAULT_DECK_TEXT = `4 Brave Mouse
-4 Snow Singer
-4 Thorn Queen
-4 Island Hero
-4 Ready Stance
-4 Quest Again`;
-
-function normalizeCardName(name) {
-  return name.trim().toLowerCase();
+function cardLabel(card) {
+  return typeof card === "string" ? card : card.name;
 }
 
-function loadCachedCardImages() {
-  try {
-    return JSON.parse(localStorage.getItem("lorcana_card_images") || "{}");
-  } catch {
-    return {};
-  }
+function cardImage(card) {
+  return typeof card === "string" ? null : card.imageUrl;
 }
 
-function saveCachedCardImages(images) {
-  localStorage.setItem("lorcana_card_images", JSON.stringify(images));
+function cardKey(card, index) {
+  return typeof card === "string"
+    ? `${card}-${index}`
+    : card.instanceId || `${card.id}-${index}`;
 }
 
-async function fetchCardImage(cardName) {
-  const response = await fetch(
-    `https://api.lorcast.com/v0/cards/search?q=${encodeURIComponent(cardName)}&unique=cards`
-  );
-
-  const data = await response.json();
-  const results = data?.results || [];
-
-  const exactMatch =
-    results.find(
-      (card) => normalizeCardName(card.name) === normalizeCardName(cardName)
-    ) || results[0];
-
-  return (
-    exactMatch?.image_uris?.digital?.normal ||
-    exactMatch?.image_uris?.digital?.large ||
-    exactMatch?.image_uris?.digital?.full ||
-    null
-  );
-}
-
-function parseDeckList(text) {
-  const cards = [];
-
-  text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .forEach((line) => {
-      const match = line.match(/^(\d+)\s+(.+)$/);
-
-      if (match) {
-        const quantity = Number(match[1]);
-        const name = match[2].trim();
-
-        for (let i = 0; i < quantity; i++) {
-          cards.push(name);
-        }
-      } else {
-        cards.push(line);
-      }
-    });
-
-  return cards;
+function makeCardInstance(card) {
+  return {
+    ...card,
+    instanceId: crypto.randomUUID()
+  };
 }
 
 function loadSavedDecks() {
   try {
-    return JSON.parse(localStorage.getItem("lorcana_saved_decks") || "{}");
+    return JSON.parse(localStorage.getItem("lorcana_saved_decks_v2") || "{}");
   } catch {
     return {};
   }
 }
 
 function saveSavedDecks(decks) {
-  localStorage.setItem("lorcana_saved_decks", JSON.stringify(decks));
+  localStorage.setItem("lorcana_saved_decks_v2", JSON.stringify(decks));
+}
+
+async function searchLorcastCards(query) {
+  const response = await fetch(
+    `https://api.lorcast.com/v0/cards/search?q=${encodeURIComponent(query)}&unique=prints`
+  );
+
+  const data = await response.json();
+  const results = data?.results || [];
+
+  return results.slice(0, 24).map((card) => ({
+    id: card.id,
+    name: card.full_name || card.name,
+    simpleName: card.name,
+    imageUrl:
+      card.image_uris?.digital?.normal ||
+      card.image_uris?.digital?.large ||
+      card.image_uris?.digital?.full ||
+      null
+  }));
 }
 
 function makeRoomCode() {
@@ -112,8 +84,8 @@ function makePlayerId() {
   return id;
 }
 
-function makePlayerState(username, color, deckListText) {
-  const deck = parseDeckList(deckListText);
+function makePlayerState(username, color, deckCards) {
+  const deck = deckCards.map(makeCardInstance);
   const hand = deck.slice(0, 6);
   const remainingDeck = deck.slice(6);
 
@@ -140,61 +112,54 @@ function App() {
 
   const [username, setUsername] = useState("");
   const [playerColor, setPlayerColor] = useState(PLAYER_COLORS[0].value);
+
   const [deckName, setDeckName] = useState("");
-  const [deckListText, setDeckListText] = useState(DEFAULT_DECK_TEXT);
+  const [deckCards, setDeckCards] = useState([]);
   const [savedDecks, setSavedDecks] = useState(loadSavedDecks);
   const [selectedSavedDeckName, setSelectedSavedDeckName] = useState("");
+
+  const [cardSearch, setCardSearch] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
 
   const [joinCode, setJoinCode] = useState("");
   const [currentRoom, setCurrentRoom] = useState(null);
   const [players, setPlayers] = useState({});
+  const [selectedCardKey, setSelectedCardKey] = useState(null);
   const [selectedCard, setSelectedCard] = useState(null);
   const [selectedMulliganCards, setSelectedMulliganCards] = useState([]);
   const [message, setMessage] = useState("");
   const [currentTurnPlayerId, setCurrentTurnPlayerId] = useState(null);
   const [rollResults, setRollResults] = useState([]);
   const [rollMessage, setRollMessage] = useState("");
-  const [cardImages, setCardImages] = useState(loadCachedCardImages);
 
-  useEffect(() => {
-    if (!currentRoom) return;
-
-    const visibleCards = new Set();
-
-    Object.values(players).forEach((player) => {
-      (player.board || []).forEach((card) => visibleCards.add(card));
-      (player.inkwell || []).forEach((card) => visibleCards.add(card));
-      (player.discard || []).forEach((card) => visibleCards.add(card));
-    });
-
-    const me = players[playerId];
-    if (me) {
-      (me.hand || []).forEach((card) => visibleCards.add(card));
+  async function runCardSearch() {
+    if (!cardSearch.trim()) {
+      setMessage("Type a card name to search.");
+      return;
     }
 
-    const missingCards = [...visibleCards].filter(
-      (card) => cardImages[normalizeCardName(card)] === undefined
-    );
+    setIsSearching(true);
+    setMessage("");
 
-    if (!missingCards.length) return;
-
-    async function loadImages() {
-      const nextImages = { ...cardImages };
-
-      for (const card of missingCards) {
-        try {
-          nextImages[normalizeCardName(card)] = await fetchCardImage(card);
-        } catch {
-          nextImages[normalizeCardName(card)] = null;
-        }
-      }
-
-      setCardImages(nextImages);
-      saveCachedCardImages(nextImages);
+    try {
+      const results = await searchLorcastCards(cardSearch.trim());
+      setSearchResults(results);
+      setMessage(`Found ${results.length} card(s).`);
+    } catch {
+      setMessage("Card search failed. Try again.");
     }
 
-    loadImages();
-  }, [players, currentRoom]);
+    setIsSearching(false);
+  }
+
+  function addCardToDeck(card) {
+    setDeckCards((cards) => [...cards, card]);
+  }
+
+  function removeDeckCard(indexToRemove) {
+    setDeckCards((cards) => cards.filter((_, index) => index !== indexToRemove));
+  }
 
   function saveCurrentDeck() {
     const name = deckName.trim();
@@ -204,9 +169,14 @@ function App() {
       return;
     }
 
+    if (deckCards.length === 0) {
+      setMessage("Add at least one card to your deck.");
+      return;
+    }
+
     const nextDecks = {
       ...savedDecks,
-      [name]: deckListText
+      [name]: deckCards
     };
 
     setSavedDecks(nextDecks);
@@ -220,7 +190,7 @@ function App() {
 
     setSelectedSavedDeckName(name);
     setDeckName(name);
-    setDeckListText(savedDecks[name]);
+    setDeckCards(savedDecks[name] || []);
     setMessage(`Loaded deck: ${name}`);
   }
 
@@ -276,7 +246,7 @@ function App() {
     if (!nextPlayers[playerId]) {
       nextPlayers = {
         ...nextPlayers,
-        [playerId]: makePlayerState(username.trim(), playerColor, deckListText)
+        [playerId]: makePlayerState(username.trim(), playerColor, deckCards)
       };
     }
 
@@ -311,9 +281,7 @@ function App() {
       return;
     }
 
-    const deck = parseDeckList(deckListText);
-
-    if (deck.length === 0) {
+    if (deckCards.length === 0) {
       setMessage("Add at least one card to your deck.");
       return;
     }
@@ -332,7 +300,7 @@ function App() {
     }
 
     const initialPlayers = {
-      [playerId]: makePlayerState(username.trim(), playerColor, deckListText)
+      [playerId]: makePlayerState(username.trim(), playerColor, deckCards)
     };
 
     await supabase.from("game_state").insert({
@@ -354,10 +322,8 @@ function App() {
       return;
     }
 
-    const deck = parseDeckList(deckListText);
-
-    if (deck.length === 0) {
-      setMessage("Add at least one card to your deck.");
+    if (deckCards.length === 0) {
+      setMessage("Add or load a deck first.");
       return;
     }
 
@@ -393,6 +359,7 @@ function App() {
     setCurrentRoom(null);
     setPlayers({});
     setSelectedCard(null);
+    setSelectedCardKey(null);
     setSelectedMulliganCards([]);
     setJoinCode("");
     setCurrentTurnPlayerId(null);
@@ -408,18 +375,34 @@ function App() {
     await saveGameState(nextPlayers);
   }
 
-  function toggleMulliganCard(card) {
+  function toggleMulliganCard(card, key) {
     setSelectedCard(card);
+    setSelectedCardKey(key);
 
     setSelectedMulliganCards((current) =>
-      current.includes(card)
-        ? current.filter((c) => c !== card)
-        : [...current, card]
+      current.includes(key)
+        ? current.filter((c) => c !== key)
+        : [...current, key]
     );
   }
 
+  function removeCardFromZone(cards, key) {
+    return cards.filter((card, index) => cardKey(card, index) !== key);
+  }
+
+  function findCardInZones(me, key) {
+    const zones = ["hand", "board", "inkwell", "discard"];
+
+    for (const zone of zones) {
+      const found = me[zone].find((card, index) => cardKey(card, index) === key);
+      if (found) return { card: found, zone };
+    }
+
+    return null;
+  }
+
   async function moveSelectedCard(targetZone) {
-    if (!selectedCard) {
+    if (!selectedCardKey) {
       setMessage("Click one of your cards first.");
       return;
     }
@@ -427,35 +410,39 @@ function App() {
     const me = players[playerId];
     if (!me) return;
 
+    const found = findCardInZones(me, selectedCardKey);
+    if (!found) return;
+
     const nextMe = {
       ...me,
-      hand: me.hand.filter((c) => c !== selectedCard),
-      board: me.board.filter((c) => c !== selectedCard),
-      inkwell: me.inkwell.filter((c) => c !== selectedCard),
-      discard: me.discard.filter((c) => c !== selectedCard),
-      exerted: (me.exerted || []).filter((c) => c !== selectedCard),
+      hand: removeCardFromZone(me.hand, selectedCardKey),
+      board: removeCardFromZone(me.board, selectedCardKey),
+      inkwell: removeCardFromZone(me.inkwell, selectedCardKey),
+      discard: removeCardFromZone(me.discard, selectedCardKey),
+      exerted: (me.exerted || []).filter((c) => c !== selectedCardKey),
       damage: { ...(me.damage || {}) }
     };
 
     if (targetZone !== "board") {
-      delete nextMe.damage[selectedCard];
+      delete nextMe.damage[selectedCardKey];
     }
 
-    nextMe[targetZone] = [...nextMe[targetZone], selectedCard];
+    nextMe[targetZone] = [...nextMe[targetZone], found.card];
 
     await updateMe(nextMe);
     setSelectedCard(null);
-    setSelectedMulliganCards((cards) => cards.filter((c) => c !== selectedCard));
+    setSelectedCardKey(null);
+    setSelectedMulliganCards((cards) => cards.filter((c) => c !== selectedCardKey));
   }
 
-  async function toggleExert(card) {
+  async function toggleExert(card, key) {
     const me = players[playerId];
     if (!me) return;
 
     const exerted = me.exerted || [];
-    const nextExerted = exerted.includes(card)
-      ? exerted.filter((c) => c !== card)
-      : [...exerted, card];
+    const nextExerted = exerted.includes(key)
+      ? exerted.filter((c) => c !== key)
+      : [...exerted, key];
 
     await updateMe({
       ...me,
@@ -486,19 +473,19 @@ function App() {
   async function changeDamage(amount) {
     const me = players[playerId];
 
-    if (!me || !selectedCard || !me.board.includes(selectedCard)) {
+    if (!me || !selectedCardKey || !me.board.some((card, index) => cardKey(card, index) === selectedCardKey)) {
       setMessage("Select one of your board cards first.");
       return;
     }
 
-    const currentDamage = me.damage?.[selectedCard] || 0;
+    const currentDamage = me.damage?.[selectedCardKey] || 0;
     const nextDamage = Math.max(0, currentDamage + amount);
 
     await updateMe({
       ...me,
       damage: {
         ...(me.damage || {}),
-        [selectedCard]: nextDamage
+        [selectedCardKey]: nextDamage
       }
     });
   }
@@ -506,7 +493,7 @@ function App() {
   async function clearDamage() {
     const me = players[playerId];
 
-    if (!me || !selectedCard || !me.board.includes(selectedCard)) {
+    if (!me || !selectedCardKey || !me.board.some((card, index) => cardKey(card, index) === selectedCardKey)) {
       setMessage("Select one of your board cards first.");
       return;
     }
@@ -515,7 +502,7 @@ function App() {
       ...me,
       damage: {
         ...(me.damage || {}),
-        [selectedCard]: 0
+        [selectedCardKey]: 0
       }
     });
   }
@@ -559,6 +546,7 @@ function App() {
     });
 
     setSelectedCard(null);
+    setSelectedCardKey(null);
     setSelectedMulliganCards([]);
   }
 
@@ -571,8 +559,8 @@ function App() {
     }
 
     const selectedSet = new Set(selectedMulliganCards);
-    const keptHand = me.hand.filter((card) => !selectedSet.has(card));
-    const returnedCards = me.hand.filter((card) => selectedSet.has(card));
+    const keptHand = me.hand.filter((card, index) => !selectedSet.has(cardKey(card, index)));
+    const returnedCards = me.hand.filter((card, index) => selectedSet.has(cardKey(card, index)));
 
     const deckWithReturnedCards = [...me.deck, ...returnedCards];
     const shuffledDeck = [...deckWithReturnedCards].sort(() => Math.random() - 0.5);
@@ -588,6 +576,7 @@ function App() {
     });
 
     setSelectedCard(null);
+    setSelectedCardKey(null);
     setSelectedMulliganCards([]);
   }
 
@@ -662,15 +651,9 @@ function App() {
           const nextRollMessage = payload.new?.state?.rollMessage;
 
           if (nextPlayers) setPlayers(nextPlayers);
-          if (nextTurnPlayerId !== undefined) {
-            setCurrentTurnPlayerId(nextTurnPlayerId);
-          }
-          if (nextRollResults !== undefined) {
-            setRollResults(nextRollResults);
-          }
-          if (nextRollMessage !== undefined) {
-            setRollMessage(nextRollMessage);
-          }
+          if (nextTurnPlayerId !== undefined) setCurrentTurnPlayerId(nextTurnPlayerId);
+          if (nextRollResults !== undefined) setRollResults(nextRollResults);
+          if (nextRollMessage !== undefined) setRollMessage(nextRollMessage);
         }
       )
       .subscribe();
@@ -765,18 +748,16 @@ function App() {
                     cards={player.board}
                     exertedCards={player.exerted || []}
                     damage={player.damage || {}}
-                    cardImages={cardImages}
                   />
 
                   <h4>Inkwell</h4>
                   <MiniCards
                     cards={player.inkwell}
                     exertedCards={player.exerted || []}
-                    cardImages={cardImages}
                   />
 
                   <h4>Discard</h4>
-                  <MiniCards cards={player.discard} cardImages={cardImages} />
+                  <MiniCards cards={player.discard} />
                 </div>
               );
             })}
@@ -799,40 +780,40 @@ function App() {
                 <Zone
                   title="Your Hand"
                   cards={me.hand}
-                  selectedCard={selectedCard}
+                  selectedCardKey={selectedCardKey}
                   setSelectedCard={setSelectedCard}
+                  setSelectedCardKey={setSelectedCardKey}
                   selectedMulliganCards={selectedMulliganCards}
                   onCardClick={toggleMulliganCard}
-                  cardImages={cardImages}
                 />
 
                 <Zone
                   title="Your Board"
                   cards={me.board}
-                  selectedCard={selectedCard}
+                  selectedCardKey={selectedCardKey}
                   setSelectedCard={setSelectedCard}
+                  setSelectedCardKey={setSelectedCardKey}
                   exertedCards={me.exerted || []}
                   damage={me.damage || {}}
                   onDoubleClickCard={toggleExert}
-                  cardImages={cardImages}
                 />
 
                 <Zone
                   title="Your Inkwell"
                   cards={me.inkwell}
-                  selectedCard={selectedCard}
+                  selectedCardKey={selectedCardKey}
                   setSelectedCard={setSelectedCard}
+                  setSelectedCardKey={setSelectedCardKey}
                   exertedCards={me.exerted || []}
                   onDoubleClickCard={toggleExert}
-                  cardImages={cardImages}
                 />
 
                 <Zone
                   title="Your Discard"
                   cards={me.discard}
-                  selectedCard={selectedCard}
+                  selectedCardKey={selectedCardKey}
                   setSelectedCard={setSelectedCard}
-                  cardImages={cardImages}
+                  setSelectedCardKey={setSelectedCardKey}
                 />
               </div>
 
@@ -913,7 +894,7 @@ function App() {
 
           {selectedCard && (
             <p>
-              Selected: <strong style={{ color: "#facc15" }}>{selectedCard}</strong>
+              Selected: <strong style={{ color: "#facc15" }}>{cardLabel(selectedCard)}</strong>
             </p>
           )}
 
@@ -926,8 +907,6 @@ function App() {
       </div>
     );
   }
-
-  const deckCardCount = parseDeckList(deckListText).length;
 
   return (
     <div style={pageStyle}>
@@ -967,7 +946,7 @@ function App() {
 
         <hr style={{ margin: "30px 0" }} />
 
-        <h2>Deck Builder</h2>
+        <h2>Card Search Deck Builder</h2>
 
         <input
           value={deckName}
@@ -976,14 +955,49 @@ function App() {
           style={inputStyle}
         />
 
-        <textarea
-          value={deckListText}
-          onChange={(e) => setDeckListText(e.target.value)}
-          placeholder={"One card per line, or use quantities like:\n4 Mickey Mouse\n2 Elsa"}
-          style={textareaStyle}
-        />
+        <div>
+          <input
+            value={cardSearch}
+            onChange={(e) => setCardSearch(e.target.value)}
+            placeholder="Search card, like Mickey Mouse"
+            style={inputStyle}
+          />
 
-        <p>{deckCardCount} card(s) in deck</p>
+          <button onClick={runCardSearch} style={buttonStyle}>
+            {isSearching ? "Searching..." : "Search Cards"}
+          </button>
+        </div>
+
+        <div style={searchResultsStyle}>
+          {searchResults.map((card) => (
+            <button
+              key={card.id}
+              onClick={() => addCardToDeck(card)}
+              style={searchCardStyle}
+            >
+              {card.imageUrl ? (
+                <img src={card.imageUrl} alt={card.name} style={searchCardImageStyle} />
+              ) : (
+                <span>{card.name}</span>
+              )}
+              <strong>{card.name}</strong>
+              <small>Click to add</small>
+            </button>
+          ))}
+        </div>
+
+        <h3>Current Deck: {deckCards.length} card(s)</h3>
+
+        <div style={deckListStyle}>
+          {deckCards.map((card, index) => (
+            <div key={`${card.id}-${index}`} style={deckListItemStyle}>
+              <span>{card.name}</span>
+              <button onClick={() => removeDeckCard(index)} style={smallButtonStyle}>
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
 
         <button onClick={saveCurrentDeck} style={buttonStyle}>
           Save Deck
@@ -1035,41 +1049,55 @@ function App() {
   );
 }
 
-function CardVisual({ card, imageUrl, isMini = false }) {
+function CardVisual({ card, isMini = false }) {
+  const imageUrl = cardImage(card);
+
   if (imageUrl) {
     return (
-      <img
-        src={imageUrl}
-        alt={card}
-        style={isMini ? miniCardImageStyle : cardImageStyle}
-      />
+      <>
+        <img
+          src={imageUrl}
+          alt={cardLabel(card)}
+          style={isMini ? miniCardImageStyle : cardImageStyle}
+        />
+
+        {!isMini && (
+          <div className="card-hover-preview">
+            <img
+              src={imageUrl}
+              alt={cardLabel(card)}
+              style={hoverPreviewImageStyle}
+            />
+          </div>
+        )}
+      </>
     );
   }
 
-  return <span>{card}</span>;
+  return <span>{cardLabel(card)}</span>;
 }
 
-function MiniCards({ cards, exertedCards = [], damage = {}, cardImages = {} }) {
+function MiniCards({ cards, exertedCards = [], damage = {} }) {
   if (!cards.length) return <p style={{ color: "#9ca3af" }}>Empty</p>;
 
   return (
     <div style={miniCardRowStyle}>
       {cards.map((card, index) => {
-        const imageUrl = cardImages[normalizeCardName(card)];
+        const key = cardKey(card, index);
 
         return (
           <div
-            key={`${card}-${index}`}
+            key={key}
             style={{
               ...miniCardStyle,
-              transform: exertedCards.includes(card) ? "rotate(90deg)" : "none"
+              transform: exertedCards.includes(key) ? "rotate(90deg)" : "none"
             }}
           >
-            <CardVisual card={card} imageUrl={imageUrl} isMini />
+            <CardVisual card={card} isMini />
 
-            {(damage[card] || 0) > 0 && (
+            {(damage[key] || 0) > 0 && (
               <div style={damageBadgeStyle}>
-                {damage[card]}
+                {damage[key]}
               </div>
             )}
           </div>
@@ -1082,14 +1110,14 @@ function MiniCards({ cards, exertedCards = [], damage = {}, cardImages = {} }) {
 function Zone({
   title,
   cards,
-  selectedCard,
+  selectedCardKey,
   setSelectedCard,
+  setSelectedCardKey,
   selectedMulliganCards = [],
   onCardClick,
   exertedCards = [],
   damage = {},
-  onDoubleClickCard,
-  cardImages = {}
+  onDoubleClickCard
 }) {
   return (
     <div style={zoneStyle}>
@@ -1098,45 +1126,33 @@ function Zone({
 
       <div style={cardRowStyle}>
         {cards.map((card, index) => {
-          const cardKey = `${card}-${index}`;
-const isMulliganSelected = selectedMulliganCards.includes(cardKey);
-          const cardDamage = damage[card] || 0;
-          const imageUrl = cardImages[normalizeCardName(card)];
+          const key = cardKey(card, index);
+          const isMulliganSelected = selectedMulliganCards.includes(key);
+          const cardDamage = damage[key] || 0;
 
           return (
             <button
-              key={`${card}-${index}`}
+              key={key}
               onClick={() => {
                 if (onCardClick) {
-  onCardClick(cardKey);
-} else {
-  setSelectedCard(`${card}-${index}`);
-}
+                  onCardClick(card, key);
+                } else {
+                  setSelectedCard(card);
+                  setSelectedCardKey(key);
+                }
               }}
-              onDoubleClick={() => onDoubleClickCard?.(card)}
+              onDoubleClick={() => onDoubleClickCard?.(card, key)}
               style={{
                 ...cardStyle,
                 border: isMulliganSelected
-  ? "3px solid #38bdf8"
-  : selectedCard === `${card}-${index}`
-    ? "3px solid #facc15"
-    : "1px solid #374151",
-                transform: exertedCards.includes(card) ? "rotate(90deg)" : "none"
+                  ? "3px solid #38bdf8"
+                  : selectedCardKey === key
+                    ? "3px solid #facc15"
+                    : "1px solid #374151",
+                transform: exertedCards.includes(key) ? "rotate(90deg)" : "none"
               }}
             >
-              <div style={{ position: "relative" }}>
-  <CardVisual card={card} imageUrl={imageUrl} />
-
-  {imageUrl && (
-    <div className="card-hover-preview">
-      <img
-        src={imageUrl}
-        alt={card}
-        style={hoverPreviewImageStyle}
-      />
-    </div>
-  )}
-</div>
+              <CardVisual card={card} />
 
               {cardDamage > 0 && (
                 <div style={damageBadgeStyle}>
@@ -1162,7 +1178,7 @@ const pageStyle = {
 };
 
 const panelStyle = {
-  width: "min(90vw, 700px)",
+  width: "min(90vw, 900px)",
   border: "1px solid #374151",
   borderRadius: "16px",
   padding: "24px",
@@ -1244,6 +1260,15 @@ const cardStyle = {
   position: "relative",
   overflow: "visible"
 };
+
+const cardImageStyle = {
+  width: "100%",
+  height: "100%",
+  objectFit: "contain",
+  borderRadius: "8px",
+  display: "block"
+};
+
 const hoverPreviewImageStyle = {
   position: "fixed",
   right: "20px",
@@ -1256,14 +1281,6 @@ const hoverPreviewImageStyle = {
   background: "#111827",
   zIndex: 9999,
   pointerEvents: "none"
-};
-
-const cardImageStyle = {
-  width: "100%",
-  height: "100%",
-  objectFit: "contain",
-  borderRadius: "8px",
-  display: "block"
 };
 
 const damageBadgeStyle = {
@@ -1343,6 +1360,56 @@ const colorButtonStyle = {
   fontSize: "18px"
 };
 
+const searchResultsStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+  gap: "12px",
+  margin: "20px 0"
+};
+
+const searchCardStyle = {
+  border: "1px solid #374151",
+  borderRadius: "12px",
+  background: "#020617",
+  color: "white",
+  padding: "10px",
+  cursor: "pointer",
+  display: "grid",
+  gap: "8px",
+  justifyItems: "center"
+};
+
+const searchCardImageStyle = {
+  width: "110px",
+  borderRadius: "8px"
+};
+
+const deckListStyle = {
+  maxHeight: "220px",
+  overflowY: "auto",
+  border: "1px solid #374151",
+  borderRadius: "12px",
+  padding: "10px",
+  background: "#020617",
+  marginBottom: "15px"
+};
+
+const deckListItemStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: "10px",
+  borderBottom: "1px solid #1f2937",
+  padding: "6px"
+};
+
+const smallButtonStyle = {
+  padding: "6px 10px",
+  borderRadius: "8px",
+  border: "none",
+  cursor: "pointer"
+};
+
 const buttonStyle = {
   padding: "12px 20px",
   borderRadius: "10px",
@@ -1360,16 +1427,6 @@ const inputStyle = {
   marginBottom: "10px"
 };
 
-const textareaStyle = {
-  width: "90%",
-  minHeight: "180px",
-  padding: "12px",
-  borderRadius: "10px",
-  border: "1px solid #374151",
-  background: "#020617",
-  color: "white",
-  marginBottom: "10px"
-};
 const hoverStyle = document.createElement("style");
 hoverStyle.textContent = `
   .card-hover-preview {
@@ -1381,6 +1438,7 @@ hoverStyle.textContent = `
   }
 `;
 document.head.appendChild(hoverStyle);
+
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <App />

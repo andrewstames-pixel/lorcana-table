@@ -1098,7 +1098,8 @@ function Zone({
 
       <div style={cardRowStyle}>
         {cards.map((card, index) => {
-          const isMulliganSelected = selectedMulliganCards.includes(card);
+          const cardKey = `${card}-${index}`;
+const isMulliganSelected = selectedMulliganCards.includes(cardKey);
           const cardDamage = damage[card] || 0;
           const imageUrl = cardImages[normalizeCardName(card)];
 
@@ -1107,19 +1108,19 @@ function Zone({
               key={`${card}-${index}`}
               onClick={() => {
                 if (onCardClick) {
-                  onCardClick(card);
-                } else {
-                  setSelectedCard(card);
-                }
+  onCardClick(cardKey);
+} else {
+  setSelectedCard(`${card}-${index}`);
+}
               }}
               onDoubleClick={() => onDoubleClickCard?.(card)}
               style={{
                 ...cardStyle,
                 border: isMulliganSelected
-                  ? "3px solid #38bdf8"
-                  : selectedCard === card
-                    ? "3px solid #facc15"
-                    : "1px solid #374151",
+  ? "3px solid #38bdf8"
+  : selectedCard === `${card}-${index}`
+    ? "3px solid #facc15"
+    : "1px solid #374151",
                 transform: exertedCards.includes(card) ? "rotate(90deg)" : "none"
               }}
             >

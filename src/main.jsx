@@ -1123,7 +1123,19 @@ function Zone({
                 transform: exertedCards.includes(card) ? "rotate(90deg)" : "none"
               }}
             >
-              <CardVisual card={card} imageUrl={imageUrl} />
+              <div style={{ position: "relative" }}>
+  <CardVisual card={card} imageUrl={imageUrl} />
+
+  {imageUrl && (
+    <div className="card-hover-preview">
+      <img
+        src={imageUrl}
+        alt={card}
+        style={hoverPreviewImageStyle}
+      />
+    </div>
+  )}
+</div>
 
               {cardDamage > 0 && (
                 <div style={damageBadgeStyle}>
@@ -1229,7 +1241,20 @@ const cardStyle = {
   cursor: "pointer",
   padding: "6px",
   position: "relative",
-  overflow: "hidden"
+  overflow: "visible"
+};
+const hoverPreviewImageStyle = {
+  position: "fixed",
+  right: "20px",
+  top: "20px",
+  width: "350px",
+  maxHeight: "80vh",
+  objectFit: "contain",
+  border: "3px solid #facc15",
+  borderRadius: "12px",
+  background: "#111827",
+  zIndex: 9999,
+  pointerEvents: "none"
 };
 
 const cardImageStyle = {
@@ -1344,7 +1369,17 @@ const textareaStyle = {
   color: "white",
   marginBottom: "10px"
 };
+const hoverStyle = document.createElement("style");
+hoverStyle.textContent = `
+  .card-hover-preview {
+    display: none;
+  }
 
+  button:hover .card-hover-preview {
+    display: block;
+  }
+`;
+document.head.appendChild(hoverStyle);
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <App />

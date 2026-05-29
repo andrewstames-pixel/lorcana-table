@@ -7,6 +7,17 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
+const PLAYER_COLORS = [
+  { name: "Blue", value: "#38bdf8", emoji: "🔵" },
+  { name: "Green", value: "#22c55e", emoji: "🟢" },
+  { name: "Purple", value: "#a855f7", emoji: "🟣" },
+  { name: "Orange", value: "#f97316", emoji: "🟠" },
+  { name: "Red", value: "#ef4444", emoji: "🔴" },
+  { name: "Yellow", value: "#facc15", emoji: "🟡" },
+  { name: "Pink", value: "#ec4899", emoji: "🩷" },
+  { name: "White", value: "#e5e7eb", emoji: "⚪" }
+];
+
 const STARTING_HAND = [
   "Brave Mouse",
   "Snow Singer",
@@ -14,6 +25,19 @@ const STARTING_HAND = [
   "Island Hero",
   "Ready Stance",
   "Quest Again"
+];
+
+const STARTING_DECK = [
+  "Mirror Mage",
+  "Lantern Guard",
+  "Star Compass",
+  "Clever Fox",
+  "Royal Duel",
+  "Ink Surge",
+  "Forest Scout",
+  "Castle Cook",
+  "Hidden Path",
+  "River Guide"
 ];
 
 function makeRoomCode() {
@@ -29,10 +53,12 @@ function makePlayerId() {
   return id;
 }
 
-function makePlayerState(username) {
+function makePlayerState(username, color) {
   return {
     username,
+    color,
     lore: 0,
+    deck: [...STARTING_DECK],
     hand: [...STARTING_HAND],
     board: [],
     inkwell: [],
@@ -41,22 +67,41 @@ function makePlayerState(username) {
   };
 }
 
+function rollD6() {
+  return Math.floor(Math.random() * 6) + 1;
+}
+
 function App() {
   const playerId = makePlayerId();
 
   const [username, setUsername] = useState("");
+  const [playerColor, setPlayerColor] = useState(PLAYER_COLORS[0].value);
   const [joinCode, setJoinCode] = useState("");
   const [currentRoom, setCurrentRoom] = useState(null);
   const [players, setPlayers] = useState({});
   const [selectedCard, setSelectedCard] = useState(null);
+  const [selectedMulliganCards, setSelectedMulliganCards] = useState([]);
   const [message, setMessage] = useState("");
+  const [currentTurnPlayerId, setCurrentTurnPlayerId] = useState(null);
+  const [rollResults, setRollResults] = useState([]);
+  const [rollMessage, setRollMessage] = useState("");
 
-  async function savePlayers(nextPlayers) {
+  async function saveGameState(
+    nextPlayers,
+    nextTurnPlayerId = currentTurnPlayerId,
+    nextRollResults = rollResults,
+    nextRollMessage = rollMessage
+  ) {
     if (!currentRoom) return;
 
     await supabase.from("game_state").upsert({
       room_id: currentRoom.id,
-      state: { players: nextPlayers },
+      state: {
+        players: nextPlayers,
+        currentTurnPlayerId: nextTurnPlayerId,
+        rollResults: nextRollResults,
+        rollMessage: nextRollMessage
+      },
       updated_at: new Date().toISOString()
     });
   }
@@ -71,21 +116,36 @@ function App() {
       .maybeSingle();
 
     let nextPlayers = data?.state?.players || {};
+    let nextTurnPlayerId = data?.state?.currentTurnPlayerId || null;
+    let nextRollResults = data?.state?.rollResults || [];
+    let nextRollMessage = data?.state?.rollMessage || "";
 
     if (!nextPlayers[playerId]) {
       nextPlayers = {
         ...nextPlayers,
-        [playerId]: makePlayerState(username.trim())
+        [playerId]: makePlayerState(username.trim(), playerColor)
       };
-
-      await supabase.from("game_state").upsert({
-        room_id: room.id,
-        state: { players: nextPlayers },
-        updated_at: new Date().toISOString()
-      });
     }
 
+    if (!nextTurnPlayerId) {
+      nextTurnPlayerId = Object.keys(nextPlayers)[0];
+    }
+
+    await supabase.from("game_state").upsert({
+      room_id: room.id,
+      state: {
+        players: nextPlayers,
+        currentTurnPlayerId: nextTurnPlayerId,
+        rollResults: nextRollResults,
+        rollMessage: nextRollMessage
+      },
+      updated_at: new Date().toISOString()
+    });
+
     setPlayers(nextPlayers);
+    setCurrentTurnPlayerId(nextTurnPlayerId);
+    setRollResults(nextRollResults);
+    setRollMessage(nextRollMessage);
   }
 
   async function createRoom() {
@@ -103,16 +163,21 @@ function App() {
       .single();
 
     if (error) {
-      setMessage("Error: " + error.message);
+      setMessage(error.message);
       return;
     }
+
+    const initialPlayers = {
+      [playerId]: makePlayerState(username.trim(), playerColor)
+    };
 
     await supabase.from("game_state").insert({
       room_id: data.id,
       state: {
-        players: {
-          [playerId]: makePlayerState(username.trim())
-        }
+        players: initialPlayers,
+        currentTurnPlayerId: playerId,
+        rollResults: [],
+        rollMessage: ""
       }
     });
 
@@ -145,13 +210,41 @@ function App() {
     if (currentRoom) {
       const nextPlayers = { ...players };
       delete nextPlayers[playerId];
-      await savePlayers(nextPlayers);
+
+      let nextTurnPlayerId = currentTurnPlayerId;
+      if (nextTurnPlayerId === playerId) {
+        nextTurnPlayerId = Object.keys(nextPlayers)[0] || null;
+      }
+
+      await saveGameState(nextPlayers, nextTurnPlayerId);
     }
 
     setCurrentRoom(null);
     setPlayers({});
     setSelectedCard(null);
+    setSelectedMulliganCards([]);
     setJoinCode("");
+    setCurrentTurnPlayerId(null);
+  }
+
+  async function updateMe(nextMe) {
+    const nextPlayers = {
+      ...players,
+      [playerId]: nextMe
+    };
+
+    setPlayers(nextPlayers);
+    await saveGameState(nextPlayers);
+  }
+
+  function toggleMulliganCard(card) {
+    setSelectedCard(card);
+
+    setSelectedMulliganCards((current) =>
+      current.includes(card)
+        ? current.filter((c) => c !== card)
+        : [...current, card]
+    );
   }
 
   async function moveSelectedCard(targetZone) {
@@ -174,14 +267,9 @@ function App() {
 
     nextMe[targetZone] = [...nextMe[targetZone], selectedCard];
 
-    const nextPlayers = {
-      ...players,
-      [playerId]: nextMe
-    };
-
-    setPlayers(nextPlayers);
-    await savePlayers(nextPlayers);
+    await updateMe(nextMe);
     setSelectedCard(null);
+    setSelectedMulliganCards((cards) => cards.filter((c) => c !== selectedCard));
   }
 
   async function toggleExert(card) {
@@ -193,46 +281,152 @@ function App() {
       ? exerted.filter((c) => c !== card)
       : [...exerted, card];
 
-    const nextPlayers = {
-      ...players,
-      [playerId]: {
-        ...me,
-        exerted: nextExerted
-      }
-    };
-
-    setPlayers(nextPlayers);
-    await savePlayers(nextPlayers);
-  }
-async function readyAllCards() {
-  const me = players[playerId];
-  if (!me) return;
-
-  const nextPlayers = {
-    ...players,
-    [playerId]: {
+    await updateMe({
       ...me,
-      exerted: []
-    }
-  };
+      exerted: nextExerted
+    });
+  }
 
-  setPlayers(nextPlayers);
-  await savePlayers(nextPlayers);
-}
   async function changeLore(amount) {
     const me = players[playerId];
     if (!me) return;
 
-    const nextPlayers = {
-      ...players,
-      [playerId]: {
-        ...me,
-        lore: Math.max(0, me.lore + amount)
-      }
-    };
+    await updateMe({
+      ...me,
+      lore: Math.max(0, me.lore + amount)
+    });
+  }
 
-    setPlayers(nextPlayers);
-    await savePlayers(nextPlayers);
+  async function readyAllCards() {
+    const me = players[playerId];
+    if (!me) return;
+
+    await updateMe({
+      ...me,
+      exerted: []
+    });
+  }
+
+  async function drawCard() {
+    const me = players[playerId];
+    if (!me || !me.deck || me.deck.length === 0) return;
+
+    const drawnCard = me.deck[0];
+
+    await updateMe({
+      ...me,
+      deck: me.deck.slice(1),
+      hand: [...me.hand, drawnCard]
+    });
+  }
+
+  async function shuffleDeck() {
+    const me = players[playerId];
+    if (!me || !me.deck) return;
+
+    const shuffledDeck = [...me.deck].sort(() => Math.random() - 0.5);
+
+    await updateMe({
+      ...me,
+      deck: shuffledDeck
+    });
+  }
+
+  async function mulliganHand() {
+    const me = players[playerId];
+    if (!me || !me.deck) return;
+
+    const newDeck = [...me.deck, ...me.hand];
+    const shuffledDeck = [...newDeck].sort(() => Math.random() - 0.5);
+
+    await updateMe({
+      ...me,
+      deck: shuffledDeck.slice(6),
+      hand: shuffledDeck.slice(0, 6)
+    });
+
+    setSelectedCard(null);
+    setSelectedMulliganCards([]);
+  }
+
+  async function mulliganSelected() {
+    const me = players[playerId];
+
+    if (!me || selectedMulliganCards.length === 0) {
+      setMessage("Select one or more cards in your hand first.");
+      return;
+    }
+
+    const selectedSet = new Set(selectedMulliganCards);
+    const keptHand = me.hand.filter((card) => !selectedSet.has(card));
+    const returnedCards = me.hand.filter((card) => selectedSet.has(card));
+
+    const deckWithReturnedCards = [...me.deck, ...returnedCards];
+    const shuffledDeck = [...deckWithReturnedCards].sort(() => Math.random() - 0.5);
+
+    const replacementCount = returnedCards.length;
+    const replacementCards = shuffledDeck.slice(0, replacementCount);
+    const remainingDeck = shuffledDeck.slice(replacementCount);
+
+    await updateMe({
+      ...me,
+      hand: [...keptHand, ...replacementCards],
+      deck: remainingDeck
+    });
+
+    setSelectedCard(null);
+    setSelectedMulliganCards([]);
+  }
+
+  async function nextTurn() {
+    const playerIds = Object.keys(players);
+    if (playerIds.length === 0) return;
+
+    const currentIndex = playerIds.indexOf(currentTurnPlayerId);
+    const safeCurrentIndex = currentIndex === -1 ? 0 : currentIndex;
+    const nextIndex = (safeCurrentIndex + 1) % playerIds.length;
+    const nextTurnPlayerId = playerIds[nextIndex];
+
+    setCurrentTurnPlayerId(nextTurnPlayerId);
+    await saveGameState(players, nextTurnPlayerId);
+  }
+
+  async function rollForFirstPlayer() {
+    const playerEntries = Object.entries(players);
+    if (playerEntries.length === 0) return;
+
+    let contenders = playerEntries;
+    const history = [];
+
+    while (contenders.length > 1) {
+      const roundRolls = contenders.map(([id, player]) => ({
+        id,
+        username: player.username,
+        roll: rollD6()
+      }));
+
+      history.push(roundRolls);
+
+      const highest = Math.max(...roundRolls.map((r) => r.roll));
+      const tied = roundRolls.filter((r) => r.roll === highest);
+
+      contenders = tied.map((roll) => [
+        roll.id,
+        players[roll.id]
+      ]);
+    }
+
+    const winnerId = contenders[0][0];
+    const winnerName = players[winnerId]?.username || "Unknown";
+
+    const nextRollMessage = `${winnerName} goes first!`;
+    const nextRollResults = history;
+
+    setCurrentTurnPlayerId(winnerId);
+    setRollResults(nextRollResults);
+    setRollMessage(nextRollMessage);
+
+    await saveGameState(players, winnerId, nextRollResults, nextRollMessage);
   }
 
   useEffect(() => {
@@ -250,7 +444,20 @@ async function readyAllCards() {
         },
         (payload) => {
           const nextPlayers = payload.new?.state?.players;
+          const nextTurnPlayerId = payload.new?.state?.currentTurnPlayerId;
+          const nextRollResults = payload.new?.state?.rollResults;
+          const nextRollMessage = payload.new?.state?.rollMessage;
+
           if (nextPlayers) setPlayers(nextPlayers);
+          if (nextTurnPlayerId !== undefined) {
+            setCurrentTurnPlayerId(nextTurnPlayerId);
+          }
+          if (nextRollResults !== undefined) {
+            setRollResults(nextRollResults);
+          }
+          if (nextRollMessage !== undefined) {
+            setRollMessage(nextRollMessage);
+          }
         }
       )
       .subscribe();
@@ -266,85 +473,214 @@ async function readyAllCards() {
       <div style={pageStyle}>
         <div style={roomPanelStyle}>
           <h1>Lorcana Table 🎴</h1>
+
           <h2>
             Room: <span style={{ color: "#facc15" }}>{currentRoom.code}</span>
           </h2>
 
+          <h3>
+            Current Turn:{" "}
+            <span style={{ color: players[currentTurnPlayerId]?.color || "#facc15" }}>
+              {players[currentTurnPlayerId]?.username || "Waiting..."}
+            </span>
+          </h3>
+
+          {rollMessage && (
+            <div style={rollPanelStyle}>
+              <h3>🎲 Roll for First Player</h3>
+              <p>{rollMessage}</p>
+
+              {rollResults.map((round, roundIndex) => (
+                <div key={roundIndex}>
+                  <strong>Round {roundIndex + 1}</strong>
+                  <div>
+                    {round.map((result) => (
+                      <span
+                        key={result.id}
+                        style={{
+                          ...rollResultStyle,
+                          borderColor: players[result.id]?.color || "#374151"
+                        }}
+                      >
+                        {result.username}: {result.roll}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div style={playersGridStyle}>
-            {playerList.map(([id, player]) => (
-              <div key={id} style={seatStyle}>
-                <h3>{player.username}</h3>
-                <p>Lore: {player.lore}</p>
-                <p>
-                  Hand:{" "}
-                  {id === playerId
-                    ? player.hand.length
-                    : `${player.hand.length} hidden card(s)`}
-                </p>
+            {playerList.map(([id, player]) => {
+              const isCurrentTurn = id === currentTurnPlayerId;
 
-                <h4>Board</h4>
-                <MiniCards cards={player.board} exertedCards={player.exerted || []} />
+              return (
+                <div
+                  key={id}
+                  style={{
+                    ...seatStyle,
+                    borderColor: player.color || "#374151",
+                    boxShadow: isCurrentTurn
+                      ? `0 0 20px ${player.color || "#facc15"}`
+                      : "none"
+                  }}
+                >
+                  <h3 style={{ color: player.color || "white" }}>
+                    {player.username}
+                  </h3>
 
-                <h4>Inkwell</h4>
-                <MiniCards cards={player.inkwell} />
+                  {isCurrentTurn && (
+                    <p style={{ color: player.color || "#facc15", fontWeight: "bold" }}>
+                      Current Turn
+                    </p>
+                  )}
 
-                <h4>Discard</h4>
-                <MiniCards cards={player.discard} />
-              </div>
-            ))}
+                  <p>Lore: {player.lore}</p>
+
+                  <p>
+                    Hand:{" "}
+                    {id === playerId
+                      ? player.hand.length
+                      : `${player.hand.length} hidden`}
+                    <br />
+                    Deck: {player.deck?.length || 0}
+                  </p>
+
+                  <h4>Board</h4>
+                  <MiniCards cards={player.board} exertedCards={player.exerted || []} />
+
+                  <h4>Inkwell</h4>
+                  <MiniCards cards={player.inkwell} />
+
+                  <h4>Discard</h4>
+                  <MiniCards cards={player.discard} />
+                </div>
+              );
+            })}
           </div>
 
           {me && (
             <>
               <div style={gameAreaStyle}>
-                <Zone title="Your Hand" onDropCard={handleDropCard} cards={me.hand} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
+                <div style={zoneStyle}>
+                  <h2>Your Deck</h2>
+                  <button onClick={drawCard} style={deckPileStyle}>
+                    <div style={{ fontSize: "18px", fontWeight: "bold" }}>DECK</div>
+                    <div style={{ fontSize: "28px", fontWeight: "bold" }}>
+                      {me.deck?.length || 0}
+                    </div>
+                    <div style={{ fontSize: "12px" }}>Click to draw</div>
+                  </button>
+                </div>
 
-<Zone title="Your Board" onDropCard={handleDropCard} cards={me.board} selectedCard={selectedCard} setSelectedCard={setSelectedCard} exertedCards={me.exerted || []} onDoubleClickCard={toggleExert} />
+                <Zone
+                  title="Your Hand"
+                  cards={me.hand}
+                  selectedCard={selectedCard}
+                  setSelectedCard={setSelectedCard}
+                  selectedMulliganCards={selectedMulliganCards}
+                  onCardClick={toggleMulliganCard}
+                />
 
-<Zone title="Your Inkwell" onDropCard={handleDropCard} cards={me.inkwell} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
+                <Zone
+                  title="Your Board"
+                  cards={me.board}
+                  selectedCard={selectedCard}
+                  setSelectedCard={setSelectedCard}
+                  exertedCards={me.exerted || []}
+                  onDoubleClickCard={toggleExert}
+                />
 
-<Zone title="Your Discard" onDropCard={handleDropCard} cards={me.discard} selectedCard={selectedCard} setSelectedCard={setSelectedCard} />
+                <Zone
+                  title="Your Inkwell"
+                  cards={me.inkwell}
+                  selectedCard={selectedCard}
+                  setSelectedCard={setSelectedCard}
+                />
 
-              <div>
-                <button onClick={() => moveSelectedCard("board")} style={buttonStyle}>Move to Board</button>
-                <button onClick={() => moveSelectedCard("inkwell")} style={buttonStyle}>Move to Inkwell</button>
-                <button onClick={() => moveSelectedCard("discard")} style={buttonStyle}>Move to Discard</button>
-                <button onClick={() => moveSelectedCard("hand")} style={buttonStyle}>Return to Hand</button>
+                <Zone
+                  title="Your Discard"
+                  cards={me.discard}
+                  selectedCard={selectedCard}
+                  setSelectedCard={setSelectedCard}
+                />
               </div>
 
-              <div>
-               <div>
- <div>
- <div style={{ marginTop: "20px" }}>
-  <button
-    onClick={() => changeLore(-1)}
-    style={buttonStyle}
-  >
-    - Lore
-  </button>
+              <p>
+                Mulligan selected:{" "}
+                <strong style={{ color: "#38bdf8" }}>
+                  {selectedMulliganCards.length}
+                </strong>
+              </p>
 
-  <button
-    onClick={() => changeLore(1)}
-    style={buttonStyle}
-  >
-    + Lore
-  </button>
+              <div style={{ marginTop: "20px" }}>
+                <button onClick={rollForFirstPlayer} style={buttonStyle}>
+                  Roll for First Player
+                </button>
 
-  <button
-    onClick={readyAllCards}
-    style={buttonStyle}
-  >
-    Ready All
-  </button>
-</div>
-</div>
+                <button onClick={() => moveSelectedCard("board")} style={buttonStyle}>
+                  Move to Board
+                </button>
+
+                <button onClick={() => moveSelectedCard("inkwell")} style={buttonStyle}>
+                  Move to Inkwell
+                </button>
+
+                <button onClick={() => moveSelectedCard("discard")} style={buttonStyle}>
+                  Move to Discard
+                </button>
+
+                <button onClick={() => moveSelectedCard("hand")} style={buttonStyle}>
+                  Return to Hand
+                </button>
+
+                <button onClick={() => changeLore(-1)} style={buttonStyle}>
+                  - Lore
+                </button>
+
+                <button onClick={() => changeLore(1)} style={buttonStyle}>
+                  + Lore
+                </button>
+
+                <button onClick={readyAllCards} style={buttonStyle}>
+                  Ready All
+                </button>
+
+                <button onClick={nextTurn} style={buttonStyle}>
+                  Next Turn
+                </button>
+
+                <button onClick={drawCard} style={buttonStyle}>
+                  Draw Card
+                </button>
+
+                <button onClick={shuffleDeck} style={buttonStyle}>
+                  Shuffle Deck
+                </button>
+
+                <button onClick={mulliganHand} style={buttonStyle}>
+                  Mulligan Hand
+                </button>
+
+                <button onClick={mulliganSelected} style={buttonStyle}>
+                  Mulligan Selected
+                </button>
+              </div>
             </>
           )}
 
-          {selectedCard && <p>Selected: <strong style={{ color: "#facc15" }}>{selectedCard}</strong></p>}
+          {selectedCard && (
+            <p>
+              Selected: <strong style={{ color: "#facc15" }}>{selectedCard}</strong>
+            </p>
+          )}
+
           {message && <p>{message}</p>}
 
-          <button onClick={leaveRoom} style={buttonStyle}>Leave Room</button>
+          <button onClick={leaveRoom} style={buttonStyle}>
+            Leave Room
+          </button>
         </div>
       </div>
     );
@@ -356,18 +692,58 @@ async function readyAllCards() {
 
       <div style={panelStyle}>
         <h2>Your Name</h2>
-        <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Enter username" style={inputStyle} />
 
-        <hr style={{ margin: "30px 0", borderColor: "#374151" }} />
+        <input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="Enter username"
+          style={inputStyle}
+        />
+
+        <h2>Choose Your Color</h2>
+
+        <div style={colorPickerStyle}>
+          {PLAYER_COLORS.map((color) => (
+            <button
+              key={color.value}
+              onClick={() => setPlayerColor(color.value)}
+              style={{
+                ...colorButtonStyle,
+                background: color.value,
+                outline:
+                  playerColor === color.value
+                    ? "4px solid white"
+                    : "1px solid #374151"
+              }}
+              title={color.name}
+            >
+              {color.emoji}
+            </button>
+          ))}
+        </div>
+
+        <hr style={{ margin: "30px 0" }} />
 
         <h2>Create a Room</h2>
-        <button onClick={createRoom} style={buttonStyle}>Create Room</button>
 
-        <hr style={{ margin: "30px 0", borderColor: "#374151" }} />
+        <button onClick={createRoom} style={buttonStyle}>
+          Create Room
+        </button>
+
+        <hr style={{ margin: "30px 0" }} />
 
         <h2>Join a Room</h2>
-        <input value={joinCode} onChange={(e) => setJoinCode(e.target.value)} placeholder="Enter room code" style={inputStyle} />
-        <button onClick={joinRoom} style={buttonStyle}>Join Room</button>
+
+        <input
+          value={joinCode}
+          onChange={(e) => setJoinCode(e.target.value)}
+          placeholder="Enter room code"
+          style={inputStyle}
+        />
+
+        <button onClick={joinRoom} style={buttonStyle}>
+          Join Room
+        </button>
 
         {message && <p>{message}</p>}
       </div>
@@ -395,29 +771,50 @@ function MiniCards({ cards, exertedCards = [] }) {
   );
 }
 
-function Zone({ title, cards, selectedCard, setSelectedCard, exertedCards = [], onDoubleClickCard, onDropCard }) {
+function Zone({
+  title,
+  cards,
+  selectedCard,
+  setSelectedCard,
+  selectedMulliganCards = [],
+  onCardClick,
+  exertedCards = [],
+  onDoubleClickCard
+}) {
   return (
-    <div   style={zoneStyle}   onDragOver={(e) => e.preventDefault()}   onDrop={() => onDropCard?.(title)} >
+    <div style={zoneStyle}>
       <h2>{title}</h2>
       <p>{cards.length} card(s)</p>
 
       <div style={cardRowStyle}>
-        {cards.map((card, index) => (
-          <button
-            draggable
-            onDragStart={() => setSelectedCard(card)}
-            key={`${card}-${index}`}
-            onClick={() => setSelectedCard(card)}
-            onDoubleClick={() => onDoubleClickCard?.(card)}
-            style={{
-              ...cardStyle,
-              border: selectedCard === card ? "3px solid #facc15" : "1px solid #374151",
-              transform: exertedCards.includes(card) ? "rotate(90deg)" : "none"
-            }}
-          >
-            {card}
-          </button>
-        ))}
+        {cards.map((card, index) => {
+          const isMulliganSelected = selectedMulliganCards.includes(card);
+
+          return (
+            <button
+              key={`${card}-${index}`}
+              onClick={() => {
+                if (onCardClick) {
+                  onCardClick(card);
+                } else {
+                  setSelectedCard(card);
+                }
+              }}
+              onDoubleClick={() => onDoubleClickCard?.(card)}
+              style={{
+                ...cardStyle,
+                border: isMulliganSelected
+                  ? "3px solid #38bdf8"
+                  : selectedCard === card
+                    ? "3px solid #facc15"
+                    : "1px solid #374151",
+                transform: exertedCards.includes(card) ? "rotate(90deg)" : "none"
+              }}
+            >
+              {card}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -451,6 +848,24 @@ const roomPanelStyle = {
   textAlign: "center"
 };
 
+const rollPanelStyle = {
+  border: "1px solid #facc15",
+  borderRadius: "12px",
+  background: "#1f2937",
+  padding: "12px",
+  margin: "16px auto",
+  maxWidth: "700px"
+};
+
+const rollResultStyle = {
+  display: "inline-block",
+  margin: "6px",
+  padding: "6px 10px",
+  borderRadius: "8px",
+  background: "#020617",
+  border: "1px solid #374151"
+};
+
 const playersGridStyle = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
@@ -459,7 +874,7 @@ const playersGridStyle = {
 };
 
 const seatStyle = {
-  border: "1px solid #374151",
+  border: "3px solid #374151",
   borderRadius: "12px",
   padding: "15px",
   background: "#1f2937"
@@ -515,6 +930,37 @@ const miniCardStyle = {
   padding: "6px",
   display: "grid",
   placeItems: "center"
+};
+
+const deckPileStyle = {
+  width: "120px",
+  minHeight: "170px",
+  borderRadius: "14px",
+  background: "#111827",
+  color: "white",
+  border: "3px solid #facc15",
+  cursor: "pointer",
+  display: "grid",
+  placeItems: "center",
+  margin: "0 auto",
+  boxShadow: "0 8px 20px rgba(0,0,0,0.4)"
+};
+
+const colorPickerStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "10px",
+  justifyContent: "center",
+  margin: "16px 0"
+};
+
+const colorButtonStyle = {
+  width: "44px",
+  height: "44px",
+  borderRadius: "999px",
+  border: "none",
+  cursor: "pointer",
+  fontSize: "18px"
 };
 
 const buttonStyle = {

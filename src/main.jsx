@@ -988,16 +988,36 @@ function App() {
 
         <h3>Current Deck: {deckCards.length} card(s)</h3>
 
-        <div style={deckListStyle}>
-          {deckCards.map((card, index) => (
-            <div key={`${card.id}-${index}`} style={deckListItemStyle}>
-              <span>{card.name}</span>
-              <button onClick={() => removeDeckCard(index)} style={smallButtonStyle}>
-                Remove
-              </button>
-            </div>
-          ))}
-        </div>
+<div style={deckListStyle}>
+  {Object.entries(
+    deckCards.reduce((acc, card) => {
+      acc[card.id] = acc[card.id] || { card, count: 0 };
+      acc[card.id].count += 1;
+      return acc;
+    }, {})
+  ).map(([id, { card, count }]) => (
+    <div key={id} style={deckListItemStyle}>
+      <span>{count}x {card.name}</span>
+      <div>
+        <button
+          onClick={() => {
+            const indexToRemove = deckCards.findIndex((c) => c.instanceId === card.instanceId);
+            if (indexToRemove !== -1) removeDeckCard(indexToRemove);
+          }}
+          style={smallButtonStyle}
+        >
+          -
+        </button>
+        <button
+          onClick={() => addCardToDeck(card)}
+          style={smallButtonStyle}
+        >
+          +
+        </button>
+      </div>
+    </div>
+  ))}
+</div>
 
         <button onClick={saveCurrentDeck} style={buttonStyle}>
           Save Deck

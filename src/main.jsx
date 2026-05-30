@@ -32,6 +32,22 @@ const TYPE_FILTERS = [
   "Item",
   "Location"
 ];
+
+const CARD_TAG_OPTIONS = [
+  "Character",
+  "Item",
+  "Location",
+  "Bodyguard",
+  "Custom"
+];
+
+const CARD_TOKEN_OPTIONS = [
+  "Can’t Quest",
+  "Reckless",
+  "No Ready",
+  "Ward",
+  "Custom"
+];
 function cardLabel(card) {
   return typeof card === "string" ? card : card.name;
 }
@@ -164,7 +180,10 @@ function makePlayerState(username, color, deckCards) {
     inkwell: [],
     discard: [],
     exerted: [],
-    damage: {}
+    damage: {},
+    tags: {},
+    tokens: {},
+    attachments: {}
   };
 }
 
@@ -455,6 +474,18 @@ if (selectedTypeFilters.length > 0) {
       nextPlayers[playerId].damage = {};
     }
 
+    if (!nextPlayers[playerId].tags) {
+      nextPlayers[playerId].tags = {};
+    }
+
+    if (!nextPlayers[playerId].tokens) {
+      nextPlayers[playerId].tokens = {};
+    }
+
+    if (!nextPlayers[playerId].attachments) {
+      nextPlayers[playerId].attachments = {};
+    }
+
     if (!nextTurnPlayerId) {
       nextTurnPlayerId = Object.keys(nextPlayers)[0];
     }
@@ -602,6 +633,144 @@ if (selectedTypeFilters.length > 0) {
     return null;
   }
 
+  function cleanBoardMetadata(me, movedKey) {
+    const nextTags = { ...(me.tags || {}) };
+    const nextTokens = { ...(me.tokens || {}) };
+    const nextAttachments = { ...(me.attachments || {}) };
+
+    delete nextTags[movedKey];
+    delete nextTokens[movedKey];
+    delete nextAttachments[movedKey];
+
+    Object.keys(nextAttachments).forEach((childKey) => {
+      if (nextAttachments[childKey] === movedKey) {
+        delete nextAttachments[childKey];
+      }
+    });
+
+    return {
+      tags: nextTags,
+      tokens: nextTokens,
+      attachments: nextAttachments
+    };
+  }
+
+  function getSelectedBoardCard() {
+    const me = players[playerId];
+    if (!me || !selectedCardKey) return null;
+
+    const found = me.board.find((card, index) => cardKey(card, index) === selectedCardKey);
+    return found || null;
+  }
+
+  async function toggleCardTag(tag) {
+    const me = players[playerId];
+    const selectedBoardCard = getSelectedBoardCard();
+
+    if (!me || !selectedCardKey || !selectedBoardCard) {
+      setMessage("Select one of your board cards first.");
+      return;
+    }
+
+    let finalTag = tag;
+    if (tag === "Custom") {
+      finalTag = window.prompt("Enter custom tag:");
+      if (!finalTag?.trim()) return;
+      finalTag = finalTag.trim();
+    }
+
+    const currentTags = me.tags?.[selectedCardKey] || [];
+    const nextTagsForCard = currentTags.includes(finalTag)
+      ? currentTags.filter((existingTag) => existingTag !== finalTag)
+      : [...currentTags, finalTag];
+
+    await updateMe({
+      ...me,
+      tags: {
+        ...(me.tags || {}),
+        [selectedCardKey]: nextTagsForCard
+      }
+    });
+  }
+
+  async function addCardToken(token) {
+    const me = players[playerId];
+    const selectedBoardCard = getSelectedBoardCard();
+
+    if (!me || !selectedCardKey || !selectedBoardCard) {
+      setMessage("Select one of your board cards first.");
+      return;
+    }
+
+    let finalToken = token;
+    if (token === "Custom") {
+      finalToken = window.prompt("Enter custom token:");
+      if (!finalToken?.trim()) return;
+      finalToken = finalToken.trim();
+    }
+
+    const currentTokens = me.tokens?.[selectedCardKey] || [];
+    const nextTokensForCard = currentTokens.includes(finalToken)
+      ? currentTokens
+      : [...currentTokens, finalToken];
+
+    await updateMe({
+      ...me,
+      tokens: {
+        ...(me.tokens || {}),
+        [selectedCardKey]: nextTokensForCard
+      }
+    });
+  }
+
+  async function removeCardToken(token) {
+    const me = players[playerId];
+    const selectedBoardCard = getSelectedBoardCard();
+
+    if (!me || !selectedCardKey || !selectedBoardCard) return;
+
+    await updateMe({
+      ...me,
+      tokens: {
+        ...(me.tokens || {}),
+        [selectedCardKey]: (me.tokens?.[selectedCardKey] || []).filter((existingToken) => existingToken !== token)
+      }
+    });
+  }
+
+  async function assignSelectedCardTo(targetKey) {
+    const me = players[playerId];
+    const selectedBoardCard = getSelectedBoardCard();
+
+    if (!me || !selectedCardKey || !selectedBoardCard) {
+      setMessage("Select one of your board cards first.");
+      return;
+    }
+
+    if (!targetKey || targetKey === selectedCardKey) return;
+
+    await updateMe({
+      ...me,
+      attachments: {
+        ...(me.attachments || {}),
+        [selectedCardKey]: targetKey
+      }
+    });
+  }
+
+  async function clearSelectedAssignment() {
+    const me = players[playerId];
+    if (!me || !selectedCardKey) return;
+
+    const nextAttachments = { ...(me.attachments || {}) };
+    delete nextAttachments[selectedCardKey];
+
+    await updateMe({
+      ...me,
+      attachments: nextAttachments
+    });
+  }
+
   async function moveSelectedCard(targetZone) {
     if (!selectedCardKey) {
       setMessage("Click one of your cards first.");
@@ -626,6 +795,14 @@ if (selectedTypeFilters.length > 0) {
 
     if (targetZone !== "board") {
       delete nextMe.damage[selectedCardKey];
+      const cleanedMetadata = cleanBoardMetadata(me, selectedCardKey);
+      nextMe.tags = cleanedMetadata.tags;
+      nextMe.tokens = cleanedMetadata.tokens;
+      nextMe.attachments = cleanedMetadata.attachments;
+    } else {
+      nextMe.tags = { ...(me.tags || {}) };
+      nextMe.tokens = { ...(me.tokens || {}) };
+      nextMe.attachments = { ...(me.attachments || {}) };
     }
 
     nextMe[targetZone] = [...nextMe[targetZone], found.card];
@@ -656,6 +833,14 @@ if (selectedTypeFilters.length > 0) {
 
     if (targetZone !== "board") {
       delete nextMe.damage[draggedCardKey];
+      const cleanedMetadata = cleanBoardMetadata(me, draggedCardKey);
+      nextMe.tags = cleanedMetadata.tags;
+      nextMe.tokens = cleanedMetadata.tokens;
+      nextMe.attachments = cleanedMetadata.attachments;
+    } else {
+      nextMe.tags = { ...(me.tags || {}) };
+      nextMe.tokens = { ...(me.tokens || {}) };
+      nextMe.attachments = { ...(me.attachments || {}) };
     }
 
     nextMe[targetZone] = [...nextMe[targetZone], found.card];
@@ -1000,6 +1185,9 @@ if (selectedTypeFilters.length > 0) {
                       cards={player.board}
                       exertedCards={player.exerted || []}
                       damage={player.damage || {}}
+                      tags={player.tags || {}}
+                      tokens={player.tokens || {}}
+                      attachments={player.attachments || {}}
                     />
                   </div>
                 );
@@ -1042,6 +1230,9 @@ if (selectedTypeFilters.length > 0) {
                   setSelectedCardKey={setSelectedCardKey}
                   exertedCards={me.exerted || []}
                   damage={me.damage || {}}
+                  tags={me.tags || {}}
+                  tokens={me.tokens || {}}
+                  attachments={me.attachments || {}}
                   onDoubleClickCard={toggleExert}
                   onDropCard={moveCardByKey}
                 />
@@ -1148,6 +1339,22 @@ if (selectedTypeFilters.length > 0) {
             <p>
               Selected: <strong style={{ color: "#facc15" }}>{cardLabel(selectedCard)}</strong>
             </p>
+          )}
+
+          {me && selectedCardKey && me.board.some((card, index) => cardKey(card, index) === selectedCardKey) && (
+            <BoardCardTools
+              selectedCardKey={selectedCardKey}
+              selectedCard={selectedCard}
+              boardCards={me.board}
+              tags={me.tags || {}}
+              tokens={me.tokens || {}}
+              attachments={me.attachments || {}}
+              onToggleTag={toggleCardTag}
+              onAddToken={addCardToken}
+              onRemoveToken={removeCardToken}
+              onAssignTo={assignSelectedCardTo}
+              onClearAssignment={clearSelectedAssignment}
+            />
           )}
 
           {message && <p>{message}</p>}
@@ -1453,35 +1660,279 @@ function CardVisual({ card, isMini = false }) {
   return <span>{cardLabel(card)}</span>;
 }
 
-function MiniCards({ cards, exertedCards = [], damage = {} }) {
-  if (!cards.length) return <p style={{ color: "#9ca3af" }}>Empty</p>;
+function BoardCardTools({
+  selectedCardKey,
+  selectedCard,
+  boardCards,
+  tags = {},
+  tokens = {},
+  attachments = {},
+  onToggleTag,
+  onAddToken,
+  onRemoveToken,
+  onAssignTo,
+  onClearAssignment
+}) {
+  const selectedTags = tags[selectedCardKey] || [];
+  const selectedTokens = tokens[selectedCardKey] || [];
+  const assignmentTargetKey = attachments[selectedCardKey];
+  const boardEntries = boardCards.map((card, index) => ({
+    card,
+    key: cardKey(card, index),
+    tags: tags[cardKey(card, index)] || []
+  }));
+  const selectedIsItem = selectedTags.includes("Item");
+  const selectedIsCharacter = selectedTags.includes("Character");
+  const validTargets = boardEntries.filter(({ key, tags: cardTags }) => {
+    if (key === selectedCardKey) return false;
+    if (selectedIsItem) return cardTags.includes("Character");
+    if (selectedIsCharacter) return cardTags.includes("Location") || cardTags.includes("Item");
+    return cardTags.includes("Location") || cardTags.includes("Character") || cardTags.includes("Item");
+  });
+  const assignedTarget = boardEntries.find((entry) => entry.key === assignmentTargetKey);
 
   return (
-    <div style={miniCardRowStyle}>
-      {cards.map((card, index) => {
-        const key = cardKey(card, index);
+    <div style={boardToolsStyle}>
+      <h3>Board Tools</h3>
+      <p style={helperTextStyle}>
+        Selected board card: <strong>{cardLabel(selectedCard)}</strong>
+      </p>
 
-        return (
-          <div
-            key={key}
-            style={{
-              ...miniCardStyle,
-              transform: exertedCards.includes(key)
-  ? "rotate(90deg) scale(0.9)"
-  : "none",
-overflow: "visible"
-            }}
-          >
-            <CardVisual card={card} isMini />
+      <div>
+        <strong>Tags</strong>
+        <div>
+          {CARD_TAG_OPTIONS.map((tag) => (
+            <button
+              key={tag}
+              onClick={() => onToggleTag(tag)}
+              style={{
+                ...smallButtonStyle,
+                margin: "4px",
+                background: selectedTags.includes(tag) ? "#facc15" : "#374151",
+                color: selectedTags.includes(tag) ? "#111827" : "white"
+              }}
+            >
+              {selectedTags.includes(tag) ? `✓ ${tag}` : tag}
+            </button>
+          ))}
+        </div>
+      </div>
 
-            {(damage[key] || 0) > 0 && (
-              <div style={damageBadgeStyle}>
-                {damage[key]}
-              </div>
-            )}
+      <div style={{ marginTop: "10px" }}>
+        <strong>Tokens</strong>
+        <div>
+          {CARD_TOKEN_OPTIONS.map((token) => (
+            <button
+              key={token}
+              onClick={() => onAddToken(token)}
+              style={{ ...smallButtonStyle, margin: "4px", background: "#374151", color: "white" }}
+            >
+              + {token}
+            </button>
+          ))}
+        </div>
+
+        {selectedTokens.length > 0 && (
+          <div style={tokenListStyle}>
+            {selectedTokens.map((token) => (
+              <button
+                key={token}
+                onClick={() => onRemoveToken(token)}
+                style={tokenBadgeStyle}
+                title="Click to remove token"
+              >
+                {token} ×
+              </button>
+            ))}
           </div>
-        );
-      })}
+        )}
+      </div>
+
+      <div style={{ marginTop: "10px" }}>
+        <strong>Assign / Attach</strong>
+        <p style={helperTextStyle}>
+          Use this for items attached to characters, or characters at locations.
+        </p>
+
+        {assignedTarget && (
+          <p style={helperTextStyle}>
+            Currently assigned to: <strong>{cardLabel(assignedTarget.card)}</strong>
+          </p>
+        )}
+
+        {validTargets.length === 0 ? (
+          <p style={helperTextStyle}>
+            Tag another board card as Character, Item, or Location to assign this card.
+          </p>
+        ) : (
+          <div>
+            {validTargets.map(({ card, key, tags: cardTags }) => (
+              <button
+                key={key}
+                onClick={() => onAssignTo(key)}
+                style={{ ...smallButtonStyle, margin: "4px" }}
+              >
+                Assign to {cardLabel(card)} {cardTags.length ? `(${cardTags.join(", ")})` : ""}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <button onClick={onClearAssignment} style={{ ...smallButtonStyle, margin: "4px" }}>
+          Clear Assignment
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MiniCards({ cards, exertedCards = [], damage = {}, tags = {}, tokens = {}, attachments = {} }) {
+  if (!cards.length) return <p style={{ color: "#9ca3af" }}>Empty</p>;
+
+  const entries = cards.map((card, index) => ({
+    card,
+    key: cardKey(card, index),
+    tags: tags[cardKey(card, index)] || [],
+    tokens: tokens[cardKey(card, index)] || []
+  }));
+
+  const locationEntries = entries.filter((entry) => entry.tags.includes("Location"));
+  const attachedKeys = new Set(Object.keys(attachments || {}));
+
+  function cardNameForKey(key) {
+    return cardLabel(entries.find((entry) => entry.key === key)?.card || "");
+  }
+
+  function childrenFor(parentKey) {
+    return entries.filter((entry) => attachments[entry.key] === parentKey);
+  }
+
+  function isInsideLocation(entry) {
+    if (!attachments[entry.key]) return false;
+
+    let parentKey = attachments[entry.key];
+    const visited = new Set();
+
+    while (parentKey && !visited.has(parentKey)) {
+      visited.add(parentKey);
+      const parentEntry = entries.find((possibleParent) => possibleParent.key === parentKey);
+      if (!parentEntry) return false;
+      if (parentEntry.tags.includes("Location")) return true;
+      parentKey = attachments[parentKey];
+    }
+
+    return false;
+  }
+
+  const unassignedEntries = entries.filter(
+    (entry) => !entry.tags.includes("Location") && !attachedKeys.has(entry.key) && !isInsideLocation(entry)
+  );
+
+  function renderMiniCard(entry, compact = false) {
+    const { card, key } = entry;
+    const attachedChildren = childrenFor(key);
+    const parentName = attachments[key] ? cardNameForKey(attachments[key]) : "";
+
+    return (
+      <div
+        key={key}
+        style={{
+          ...miniCardStyle,
+          ...(compact ? compactMiniCardStyle : {}),
+          transform: exertedCards.includes(key)
+            ? "rotate(90deg) scale(0.9)"
+            : "none",
+          overflow: "visible"
+        }}
+      >
+        <CardVisual card={card} isMini />
+
+        {(damage[key] || 0) > 0 && (
+          <div style={damageBadgeStyle}>
+            {damage[key]}
+          </div>
+        )}
+
+        {(tags[key] || []).length > 0 && (
+          <div style={miniBadgeRowStyle}>
+            {(tags[key] || []).map((tag) => (
+              <span key={tag} style={miniTagBadgeStyle}>{tag}</span>
+            ))}
+          </div>
+        )}
+
+        {(tokens[key] || []).length > 0 && (
+          <div style={miniTokenRowStyle}>
+            {(tokens[key] || []).map((token) => (
+              <span key={token} style={miniTokenBadgeStyle}>{token}</span>
+            ))}
+          </div>
+        )}
+
+        {parentName && (
+          <div style={assignmentNoteStyle}>↳ {parentName}</div>
+        )}
+
+        {attachedChildren.length > 0 && (
+          <div style={assignmentNoteStyle}>
+            + {attachedChildren.map((child) => cardLabel(child.card)).join(", ")}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={miniBoardLayoutStyle}>
+      {unassignedEntries.length > 0 && (
+        <div style={miniBoardSectionStyle}>
+          <div style={miniBoardSectionTitleStyle}>Unassigned</div>
+          <div style={miniCardGroupRowStyle}>
+            {unassignedEntries.map((entry) => renderMiniCard(entry))}
+          </div>
+        </div>
+      )}
+
+      {locationEntries.length > 0 && (
+        <div style={miniBoardSectionStyle}>
+          <div style={miniBoardSectionTitleStyle}>Locations</div>
+          <div style={miniLocationGridStyle}>
+            {locationEntries.map((locationEntry) => {
+              const directChildren = childrenFor(locationEntry.key);
+              const characterChildren = directChildren.filter((entry) => !entry.tags.includes("Item"));
+              const itemChildren = directChildren.filter((entry) => entry.tags.includes("Item"));
+
+              return (
+                <div key={locationEntry.key} style={miniLocationLaneStyle}>
+                  <div style={miniLocationHeaderStyle}>
+                    {renderMiniCard(locationEntry)}
+                  </div>
+
+                  <div style={miniLocationContentsStyle}>
+                    <div style={miniBoardSubheadingStyle}>At this location</div>
+                    {characterChildren.length > 0 ? (
+                      <div style={miniCardGroupRowStyle}>
+                        {characterChildren.map((entry) => renderMiniCard(entry, true))}
+                      </div>
+                    ) : (
+                      <p style={miniEmptyTextStyle}>No characters here</p>
+                    )}
+
+                    {itemChildren.length > 0 && (
+                      <>
+                        <div style={miniBoardSubheadingStyle}>Items / Attached</div>
+                        <div style={miniCardGroupRowStyle}>
+                          {itemChildren.map((entry) => renderMiniCard(entry, true))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1498,7 +1949,10 @@ function Zone({
   exertedCards = [],
   damage = {},
   onDoubleClickCard,
-  onDropCard
+  onDropCard,
+  tags = {},
+  tokens = {},
+  attachments = {}
 }) {
   return (
     <div
@@ -1524,6 +1978,10 @@ function Zone({
           const key = cardKey(card, index);
           const isMulliganSelected = selectedMulliganCards.includes(key);
           const cardDamage = damage[key] || 0;
+          const cardTags = tags[key] || [];
+          const cardTokens = tokens[key] || [];
+          const parentCard = cards.find((possibleParent, parentIndex) => cardKey(possibleParent, parentIndex) === attachments[key]);
+          const attachedChildren = cards.filter((possibleChild, childIndex) => attachments[cardKey(possibleChild, childIndex)] === key);
 
           return (
             <button
@@ -1557,6 +2015,32 @@ function Zone({
               {cardDamage > 0 && (
                 <div style={damageBadgeStyle}>
                   {cardDamage}
+                </div>
+              )}
+
+              {cardTags.length > 0 && (
+                <div style={cardMetaRowStyle}>
+                  {cardTags.map((tag) => (
+                    <span key={tag} style={tagBadgeStyle}>{tag}</span>
+                  ))}
+                </div>
+              )}
+
+              {cardTokens.length > 0 && (
+                <div style={cardMetaRowStyle}>
+                  {cardTokens.map((token) => (
+                    <span key={token} style={tokenBadgeStyle}>{token}</span>
+                  ))}
+                </div>
+              )}
+
+              {parentCard && (
+                <div style={cardAssignmentStyle}>↳ {cardLabel(parentCard)}</div>
+              )}
+
+              {attachedChildren.length > 0 && (
+                <div style={cardAssignmentStyle}>
+                  + {attachedChildren.map((child) => cardLabel(child)).join(", ")}
                 </div>
               )}
             </button>
@@ -1741,13 +2225,13 @@ const damageBadgeStyle = {
 const miniCardRowStyle = {
   display: "flex",
   flexWrap: "wrap",
-  gap: "6px",
+  gap: "12px",
   justifyContent: "center"
 };
 
 const miniCardStyle = {
-  width: "70px",
-  minHeight: "98px",
+  width: "90px",
+  minHeight: "126px",
   borderRadius: "8px",
   background: "#020617",
   border: "1px solid #374151",
@@ -1915,6 +2399,173 @@ const textareaStyle = {
   background: "#020617",
   color: "white",
   marginBottom: "10px"
+};
+
+
+const boardToolsStyle = {
+  border: "1px solid #facc15",
+  borderRadius: "16px",
+  padding: "16px",
+  background: "#020617",
+  margin: "20px auto",
+  maxWidth: "900px"
+};
+
+const cardMetaRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "4px",
+  justifyContent: "center",
+  marginTop: "6px"
+};
+
+const tagBadgeStyle = {
+  borderRadius: "999px",
+  background: "#1d4ed8",
+  color: "white",
+  padding: "2px 6px",
+  fontSize: "11px",
+  fontWeight: "bold"
+};
+
+const tokenBadgeStyle = {
+  borderRadius: "999px",
+  border: "none",
+  background: "#7c2d12",
+  color: "white",
+  padding: "4px 8px",
+  fontSize: "12px",
+  fontWeight: "bold",
+  cursor: "pointer",
+  margin: "3px"
+};
+
+const tokenListStyle = {
+  marginTop: "6px"
+};
+
+const cardAssignmentStyle = {
+  marginTop: "6px",
+  borderRadius: "8px",
+  background: "#111827",
+  color: "#cbd5e1",
+  padding: "4px",
+  fontSize: "11px"
+};
+
+const miniBadgeRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  justifyContent: "center",
+  gap: "2px",
+  marginTop: "2px"
+};
+
+const miniTagBadgeStyle = {
+  borderRadius: "999px",
+  background: "#1d4ed8",
+  color: "white",
+  padding: "1px 4px",
+  fontSize: "8px",
+  fontWeight: "bold"
+};
+
+const miniTokenRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  justifyContent: "center",
+  gap: "2px",
+  marginTop: "2px"
+};
+
+const miniTokenBadgeStyle = {
+  borderRadius: "999px",
+  background: "#7c2d12",
+  color: "white",
+  padding: "1px 4px",
+  fontSize: "8px",
+  fontWeight: "bold"
+};
+
+const assignmentNoteStyle = {
+  marginTop: "2px",
+  color: "#cbd5e1",
+  fontSize: "8px",
+  lineHeight: "1.1"
+};
+
+
+const miniBoardLayoutStyle = {
+  display: "grid",
+  gap: "12px"
+};
+
+const miniBoardSectionStyle = {
+  border: "1px solid #374151",
+  borderRadius: "12px",
+  background: "#020617",
+  padding: "10px"
+};
+
+const miniBoardSectionTitleStyle = {
+  color: "#facc15",
+  fontWeight: "bold",
+  fontSize: "13px",
+  marginBottom: "8px",
+  textAlign: "left"
+};
+
+const miniCardGroupRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "12px",
+  justifyContent: "center",
+  alignItems: "flex-start"
+};
+
+const miniLocationGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+  gap: "12px"
+};
+
+const miniLocationLaneStyle = {
+  border: "1px solid #334155",
+  borderRadius: "12px",
+  background: "#111827",
+  padding: "10px",
+  display: "grid",
+  gap: "10px"
+};
+
+const miniLocationHeaderStyle = {
+  display: "flex",
+  justifyContent: "center",
+  paddingBottom: "8px",
+  borderBottom: "1px solid #374151"
+};
+
+const miniLocationContentsStyle = {
+  display: "grid",
+  gap: "8px"
+};
+
+const miniBoardSubheadingStyle = {
+  color: "#cbd5e1",
+  fontSize: "11px",
+  fontWeight: "bold",
+  textAlign: "left"
+};
+
+const miniEmptyTextStyle = {
+  color: "#64748b",
+  fontSize: "11px",
+  margin: "0"
+};
+
+const compactMiniCardStyle = {
+  width: "82px",
+  minHeight: "116px"
 };
 
 const hoverStyle = document.createElement("style");

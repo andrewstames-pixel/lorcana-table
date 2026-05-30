@@ -166,9 +166,12 @@ function makePlayerId() {
 }
 
 function makePlayerState(username, color, deckCards) {
-  const deck = deckCards.map(makeCardInstance);
-  const hand = deck.slice(0, 6);
-  const remainingDeck = deck.slice(6);
+  const deck = deckCards
+    .map(makeCardInstance)
+    .sort(() => Math.random() - 0.5);
+
+  const hand = deck.slice(0, 7);
+  const remainingDeck = deck.slice(7);
 
   return {
     username,
@@ -638,7 +641,6 @@ if (selectedTypeFilters.length > 0) {
     const nextTokens = { ...(me.tokens || {}) };
     const nextAttachments = { ...(me.attachments || {}) };
 
-    delete nextTags[movedKey];
     delete nextTokens[movedKey];
     delete nextAttachments[movedKey];
 
@@ -665,10 +667,10 @@ if (selectedTypeFilters.length > 0) {
 
   async function toggleCardTag(tag) {
     const me = players[playerId];
-    const selectedBoardCard = getSelectedBoardCard();
+    const selectedCardInPlay = me && selectedCardKey ? findCardInZones(me, selectedCardKey) : null;
 
-    if (!me || !selectedCardKey || !selectedBoardCard) {
-      setMessage("Select one of your board cards first.");
+    if (!me || !selectedCardKey || !selectedCardInPlay) {
+      setMessage("Select one of your cards first.");
       return;
     }
 
@@ -958,8 +960,8 @@ if (selectedTypeFilters.length > 0) {
 
     await updateMe({
       ...me,
-      deck: shuffledDeck.slice(6),
-      hand: shuffledDeck.slice(0, 6)
+      deck: shuffledDeck.slice(7),
+      hand: shuffledDeck.slice(0, 7)
     });
 
     setSelectedCard(null);
@@ -1198,7 +1200,7 @@ if (selectedTypeFilters.length > 0) {
           {me && (
             <>
               <div style={gameAreaStyle}>
-                <div style={zoneStyle}>
+                <div style={deckZoneStyle}>
                   <h2>Your Deck</h2>
                   <button onClick={drawCard} style={deckPileStyle}>
                     <div style={{ fontSize: "18px", fontWeight: "bold" }}>DECK</div>
@@ -1219,6 +1221,8 @@ if (selectedTypeFilters.length > 0) {
                   selectedMulliganCards={selectedMulliganCards}
                   onCardClick={toggleMulliganCard}
                   onDropCard={moveCardByKey}
+                  tags={me.tags || {}}
+                  tokens={me.tokens || {}}
                 />
 
                 <Zone
@@ -1341,7 +1345,7 @@ if (selectedTypeFilters.length > 0) {
             </p>
           )}
 
-          {me && selectedCardKey && me.board.some((card, index) => cardKey(card, index) === selectedCardKey) && (
+          {me && selectedCardKey && (me.board.some((card, index) => cardKey(card, index) === selectedCardKey) || me.hand.some((card, index) => cardKey(card, index) === selectedCardKey)) && (
             <BoardCardTools
               selectedCardKey={selectedCardKey}
               selectedCard={selectedCard}
@@ -1638,10 +1642,11 @@ function CardVisual({
   card,
   isMini = false,
   damageAmount = 0,
-  tags = [],
   tokens = [],
   assignmentText = "",
-  attachedText = ""
+  attachedText = "",
+  isRotated = false,
+  isLocation = false
 }) {
   const imageUrl = cardImage(card);
 
@@ -1654,12 +1659,21 @@ function CardVisual({
           style={isMini ? miniCardImageStyle : cardImageStyle}
         />
 
-        <div className="card-hover-preview" style={hoverPreviewPanelStyle}>
+        <div
+          className="card-hover-preview"
+          style={{
+            ...hoverPreviewPanelStyle,
+            ...(isRotated ? hoverPreviewCounterRotateStyle : {})
+          }}
+        >
           <div style={hoverPreviewCardWrapStyle}>
             <img
               src={imageUrl}
               alt={cardLabel(card)}
-              style={hoverPreviewImageStyle}
+              style={{
+                ...hoverPreviewImageStyle,
+                ...(isLocation ? hoverPreviewLandscapeImageStyle : {})
+              }}
             />
 
             {damageAmount > 0 && (
@@ -1668,16 +1682,8 @@ function CardVisual({
               </div>
             )}
 
-            {(tags.length > 0 || tokens.length > 0 || assignmentText || attachedText) && (
+            {(tokens.length > 0 || assignmentText || attachedText) && (
               <div style={hoverMetaPanelStyle}>
-                {tags.length > 0 && (
-                  <div style={hoverMetaRowStyle}>
-                    {tags.map((tag) => (
-                      <span key={tag} style={hoverTagBadgeStyle}>{tag}</span>
-                    ))}
-                  </div>
-                )}
-
                 {tokens.length > 0 && (
                   <div style={hoverMetaRowStyle}>
                     {tokens.map((token) => (
@@ -1876,6 +1882,8 @@ function MiniCards({ cards, exertedCards = [], damage = {}, tags = {}, tokens = 
     const { card, key } = entry;
     const attachedChildren = childrenFor(key);
     const parentName = attachments[key] ? cardNameForKey(attachments[key]) : "";
+    const isLocationCard = (tags[key] || []).includes("Location");
+    const isExertedCard = exertedCards.includes(key);
 
     return (
       <div
@@ -1883,37 +1891,30 @@ function MiniCards({ cards, exertedCards = [], damage = {}, tags = {}, tokens = 
         style={{
           ...miniCardStyle,
           ...(compact ? compactMiniCardStyle : {}),
-          transform: exertedCards.includes(key)
+          transform: isExertedCard || isLocationCard
             ? "rotate(90deg) scale(0.9)"
             : "none",
           overflow: "visible"
         }}
       >
         <CardVisual
-  card={card}
-  isMini
-  damageAmount={damage[key] || 0}
-  tags={tags[key] || []}
-  tokens={tokens[key] || []}
-  assignmentText={parentName ? `↳ ${parentName}` : ""}
-  attachedText={
-    attachedChildren.length > 0
-      ? `+ ${attachedChildren.map((child) => cardLabel(child.card)).join(", ")}`
-      : ""
-  }
-/>
+          card={card}
+          isMini
+          damageAmount={damage[key] || 0}
+          tokens={tokens[key] || []}
+          assignmentText={parentName ? `↳ ${parentName}` : ""}
+          attachedText={
+            attachedChildren.length > 0
+              ? `+ ${attachedChildren.map((child) => cardLabel(child.card)).join(", ")}`
+              : ""
+          }
+          isRotated={isExertedCard || isLocationCard}
+          isLocation={isLocationCard}
+        />
 
         {(damage[key] || 0) > 0 && (
           <div style={damageBadgeStyle}>
             {damage[key]}
-          </div>
-        )}
-
-        {(tags[key] || []).length > 0 && (
-          <div style={miniBadgeRowStyle}>
-            {(tags[key] || []).map((tag) => (
-              <span key={tag} style={miniTagBadgeStyle}>{tag}</span>
-            ))}
           </div>
         )}
 
@@ -2036,6 +2037,8 @@ function Zone({
           const cardDamage = damage[key] || 0;
           const cardTags = tags[key] || [];
           const cardTokens = tokens[key] || [];
+          const isLocationCard = cardTags.includes("Location");
+          const isRotatedCard = exertedCards.includes(key) || isLocationCard;
           const parentCard = cards.find((possibleParent, parentIndex) => cardKey(possibleParent, parentIndex) === attachments[key]);
           const attachedChildren = cards.filter((possibleChild, childIndex) => attachments[cardKey(possibleChild, childIndex)] === key);
 
@@ -2063,13 +2066,12 @@ function Zone({
                   : selectedCardKey === key
                     ? "3px solid #facc15"
                     : "1px solid #374151",
-                transform: exertedCards.includes(key) ? "rotate(90deg)" : "none"
+                transform: isRotatedCard ? "rotate(90deg)" : "none"
               }}
             >
               <CardVisual
                 card={card}
                 damageAmount={cardDamage}
-                tags={cardTags}
                 tokens={cardTokens}
                 assignmentText={parentCard ? `↳ ${cardLabel(parentCard)}` : ""}
                 attachedText={
@@ -2077,19 +2079,13 @@ function Zone({
                     ? `+ ${attachedChildren.map((child) => cardLabel(child)).join(", ")}`
                     : ""
                 }
+                isRotated={exertedCards.includes(key) || isLocationCard}
+                isLocation={isLocationCard}
               />
 
               {cardDamage > 0 && (
                 <div style={damageBadgeStyle}>
                   {cardDamage}
-                </div>
-              )}
-
-              {cardTags.length > 0 && (
-                <div style={cardMetaRowStyle}>
-                  {cardTags.map((tag) => (
-                    <span key={tag} style={tagBadgeStyle}>{tag}</span>
-                  ))}
                 </div>
               )}
 
@@ -2227,9 +2223,16 @@ const gameAreaStyle = {
 const zoneStyle = {
   border: "1px solid #374151",
   borderRadius: "16px",
-  padding: "16px",
+  padding: "12px",
   background: "#020617",
-  minHeight: "180px"
+  minHeight: "120px"
+};
+
+const deckZoneStyle = {
+  padding: "8px",
+  background: "transparent",
+  border: "none",
+  minHeight: "auto"
 };
 
 const cardRowStyle = {
@@ -2267,10 +2270,13 @@ const hoverPreviewPanelStyle = {
   pointerEvents: "none"
 };
 
+const hoverPreviewCounterRotateStyle = {
+  transform: "rotate(-90deg)",
+  transformOrigin: "center center"
+};
+
 const hoverPreviewCardWrapStyle = {
-  position: "relative",
-  width: "350px",
-  maxWidth: "40vw"
+  position: "relative"
 };
 
 const hoverPreviewImageStyle = {
@@ -2281,6 +2287,12 @@ const hoverPreviewImageStyle = {
   borderRadius: "12px",
   background: "#111827",
   display: "block"
+};
+
+const hoverPreviewLandscapeImageStyle = {
+  transform: "rotate(90deg)",
+  transformOrigin: "center center",
+  margin: "70px 0"
 };
 
 const hoverDamageBadgeStyle = {
@@ -2297,7 +2309,8 @@ const hoverDamageBadgeStyle = {
   fontWeight: "bold",
   fontSize: "26px",
   border: "3px solid white",
-  boxShadow: "0 8px 20px rgba(0,0,0,0.45)"
+  boxShadow: "0 8px 20px rgba(0,0,0,0.45)",
+  zIndex: 10000
 };
 
 const hoverMetaPanelStyle = {
@@ -2308,10 +2321,11 @@ const hoverMetaPanelStyle = {
   display: "grid",
   gap: "6px",
   justifyItems: "center",
-  background: "rgba(15, 23, 42, 0.88)",
+  background: "transparent",
   borderRadius: "10px",
-  padding: "8px",
-  border: "1px solid rgba(250, 204, 21, 0.55)"
+  padding: "0",
+  border: "none",
+  zIndex: 10000
 };
 
 const hoverMetaRowStyle = {
@@ -2321,27 +2335,19 @@ const hoverMetaRowStyle = {
   justifyContent: "center"
 };
 
-const hoverTagBadgeStyle = {
-  borderRadius: "999px",
-  background: "#1d4ed8",
-  color: "white",
-  padding: "4px 9px",
-  fontSize: "13px",
-  fontWeight: "bold"
-};
-
 const hoverTokenBadgeStyle = {
   borderRadius: "999px",
   background: "#7c2d12",
   color: "white",
-  padding: "4px 9px",
-  fontSize: "13px",
-  fontWeight: "bold"
+  padding: "6px 14px",
+  fontSize: "18px",
+  fontWeight: "bold",
+  border: "2px solid white"
 };
 
 const hoverAssignmentTextStyle = {
   color: "#e5e7eb",
-  fontSize: "13px",
+  fontSize: "15px",
   fontWeight: "bold",
   textAlign: "center"
 };
@@ -2552,11 +2558,15 @@ const boardToolsStyle = {
 };
 
 const cardMetaRowStyle = {
+  position: "absolute",
+  bottom: "6px",
+  left: "6px",
+  right: "6px",
   display: "flex",
   flexWrap: "wrap",
-  gap: "4px",
+  gap: "5px",
   justifyContent: "center",
-  marginTop: "6px"
+  zIndex: 30
 };
 
 const tagBadgeStyle = {
@@ -2570,14 +2580,15 @@ const tagBadgeStyle = {
 
 const tokenBadgeStyle = {
   borderRadius: "999px",
-  border: "none",
+  border: "2px solid white",
   background: "#7c2d12",
   color: "white",
-  padding: "4px 8px",
-  fontSize: "12px",
+  padding: "5px 12px",
+  fontSize: "14px",
   fontWeight: "bold",
   cursor: "pointer",
-  margin: "3px"
+  margin: "3px",
+  boxShadow: "0 2px 8px rgba(0,0,0,0.45)"
 };
 
 const tokenListStyle = {
@@ -2611,20 +2622,26 @@ const miniTagBadgeStyle = {
 };
 
 const miniTokenRowStyle = {
+  position: "absolute",
+  bottom: "4px",
+  left: "4px",
+  right: "4px",
   display: "flex",
   flexWrap: "wrap",
   justifyContent: "center",
-  gap: "2px",
-  marginTop: "2px"
+  gap: "3px",
+  zIndex: 35
 };
 
 const miniTokenBadgeStyle = {
   borderRadius: "999px",
   background: "#7c2d12",
   color: "white",
-  padding: "1px 4px",
-  fontSize: "8px",
-  fontWeight: "bold"
+  padding: "3px 8px",
+  fontSize: "11px",
+  fontWeight: "bold",
+  border: "1px solid white",
+  boxShadow: "0 2px 6px rgba(0,0,0,0.45)"
 };
 
 const assignmentNoteStyle = {

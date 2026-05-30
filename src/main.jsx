@@ -38,6 +38,7 @@ const CARD_TAG_OPTIONS = [
   "Item",
   "Location",
   "Bodyguard",
+  "Boosted",
   "Custom"
 ];
 
@@ -186,7 +187,9 @@ function makePlayerState(username, color, deckCards) {
     damage: {},
     tags: {},
     tokens: {},
-    attachments: {}
+    attachments: {},
+    boosts: {},
+    boostHolding: []
   };
 }
 
@@ -489,6 +492,14 @@ if (selectedTypeFilters.length > 0) {
       nextPlayers[playerId].attachments = {};
     }
 
+    if (!nextPlayers[playerId].boosts) {
+      nextPlayers[playerId].boosts = {};
+    }
+
+    if (!nextPlayers[playerId].boostHolding) {
+      nextPlayers[playerId].boostHolding = [];
+    }
+
     if (!nextTurnPlayerId) {
       nextTurnPlayerId = Object.keys(nextPlayers)[0];
     }
@@ -626,7 +637,7 @@ if (selectedTypeFilters.length > 0) {
   }
 
   function findCardInZones(me, key) {
-    const zones = ["hand", "board", "inkwell", "discard"];
+    const zones = ["hand", "board", "inkwell", "discard", "boostHolding"];
 
     for (const zone of zones) {
       const found = me[zone].find((card, index) => cardKey(card, index) === key);
@@ -640,9 +651,11 @@ if (selectedTypeFilters.length > 0) {
     const nextTags = { ...(me.tags || {}) };
     const nextTokens = { ...(me.tokens || {}) };
     const nextAttachments = { ...(me.attachments || {}) };
+    const nextBoosts = { ...(me.boosts || {}) };
 
     delete nextTokens[movedKey];
     delete nextAttachments[movedKey];
+    delete nextBoosts[movedKey];
 
     Object.keys(nextAttachments).forEach((childKey) => {
       if (nextAttachments[childKey] === movedKey) {
@@ -653,7 +666,8 @@ if (selectedTypeFilters.length > 0) {
     return {
       tags: nextTags,
       tokens: nextTokens,
-      attachments: nextAttachments
+      attachments: nextAttachments,
+      boosts: nextBoosts
     };
   }
 
@@ -773,6 +787,39 @@ if (selectedTypeFilters.length > 0) {
     });
   }
 
+  async function boostSelectedFromDeck() {
+    const me = players[playerId];
+    const selectedBoardCard = getSelectedBoardCard();
+
+    if (!me || !selectedCardKey || !selectedBoardCard) {
+      setMessage("Select one of your board cards first.");
+      return;
+    }
+
+    const selectedTags = me.tags?.[selectedCardKey] || [];
+    if (!selectedTags.includes("Boosted")) {
+      setMessage("Tag this character as Boosted first.");
+      return;
+    }
+
+    if (!me.deck || me.deck.length === 0) {
+      setMessage("Your deck is empty.");
+      return;
+    }
+
+    const boostedCard = makeCardInstance(me.deck[0]);
+    const nextBoosts = { ...(me.boosts || {}) };
+    nextBoosts[selectedCardKey] = [...(nextBoosts[selectedCardKey] || []), boostedCard];
+
+    await updateMe({
+      ...me,
+      deck: me.deck.slice(1),
+      boosts: nextBoosts
+    });
+
+    setMessage(`Boosted ${cardLabel(selectedBoardCard)} from the top of your deck.`);
+  }
+
   async function moveSelectedCard(targetZone) {
     if (!selectedCardKey) {
       setMessage("Click one of your cards first.");
@@ -785,14 +832,21 @@ if (selectedTypeFilters.length > 0) {
     const found = findCardInZones(me, selectedCardKey);
     if (!found) return;
 
+    const boostCardsToHold =
+      found.zone === "board" && targetZone !== "board"
+        ? [...((me.boosts || {})[selectedCardKey] || [])]
+        : [];
+
     const nextMe = {
       ...me,
       hand: removeCardFromZone(me.hand, selectedCardKey),
       board: removeCardFromZone(me.board, selectedCardKey),
       inkwell: removeCardFromZone(me.inkwell, selectedCardKey),
       discard: removeCardFromZone(me.discard, selectedCardKey),
+      boostHolding: removeCardFromZone(me.boostHolding || [], selectedCardKey),
       exerted: (me.exerted || []).filter((c) => c !== selectedCardKey),
-      damage: { ...(me.damage || {}) }
+      damage: { ...(me.damage || {}) },
+      boosts: { ...(me.boosts || {}) }
     };
 
     if (targetZone !== "board") {
@@ -801,10 +855,20 @@ if (selectedTypeFilters.length > 0) {
       nextMe.tags = cleanedMetadata.tags;
       nextMe.tokens = cleanedMetadata.tokens;
       nextMe.attachments = cleanedMetadata.attachments;
+      nextMe.boosts = cleanedMetadata.boosts;
+
+      if (boostCardsToHold.length > 0) {
+        nextMe.boostHolding = [
+          ...(nextMe.boostHolding || []),
+          ...boostCardsToHold
+        ];
+        setMessage(`Moved ${boostCardsToHold.length} boosted card(s) to Boost Holding.`);
+      }
     } else {
       nextMe.tags = { ...(me.tags || {}) };
       nextMe.tokens = { ...(me.tokens || {}) };
       nextMe.attachments = { ...(me.attachments || {}) };
+      nextMe.boosts = { ...(me.boosts || {}) };
     }
 
     nextMe[targetZone] = [...nextMe[targetZone], found.card];
@@ -823,14 +887,21 @@ if (selectedTypeFilters.length > 0) {
     const found = findCardInZones(me, draggedCardKey);
     if (!found) return;
 
+    const boostCardsToHold =
+      found.zone === "board" && targetZone !== "board"
+        ? [...((me.boosts || {})[draggedCardKey] || [])]
+        : [];
+
     const nextMe = {
       ...me,
       hand: removeCardFromZone(me.hand, draggedCardKey),
       board: removeCardFromZone(me.board, draggedCardKey),
       inkwell: removeCardFromZone(me.inkwell, draggedCardKey),
       discard: removeCardFromZone(me.discard, draggedCardKey),
+      boostHolding: removeCardFromZone(me.boostHolding || [], draggedCardKey),
       exerted: (me.exerted || []).filter((c) => c !== draggedCardKey),
-      damage: { ...(me.damage || {}) }
+      damage: { ...(me.damage || {}) },
+      boosts: { ...(me.boosts || {}) }
     };
 
     if (targetZone !== "board") {
@@ -839,10 +910,20 @@ if (selectedTypeFilters.length > 0) {
       nextMe.tags = cleanedMetadata.tags;
       nextMe.tokens = cleanedMetadata.tokens;
       nextMe.attachments = cleanedMetadata.attachments;
+      nextMe.boosts = cleanedMetadata.boosts;
+
+      if (boostCardsToHold.length > 0) {
+        nextMe.boostHolding = [
+          ...(nextMe.boostHolding || []),
+          ...boostCardsToHold
+        ];
+        setMessage(`Moved ${boostCardsToHold.length} boosted card(s) to Boost Holding.`);
+      }
     } else {
       nextMe.tags = { ...(me.tags || {}) };
       nextMe.tokens = { ...(me.tokens || {}) };
       nextMe.attachments = { ...(me.attachments || {}) };
+      nextMe.boosts = { ...(me.boosts || {}) };
     }
 
     nextMe[targetZone] = [...nextMe[targetZone], found.card];
@@ -851,7 +932,10 @@ if (selectedTypeFilters.length > 0) {
     setSelectedCard(found.card);
     setSelectedCardKey(cardKey(found.card, nextMe[targetZone].length - 1));
     setSelectedMulliganCards((cards) => cards.filter((c) => c !== draggedCardKey));
-    setMessage(`Moved ${cardLabel(found.card)} to ${targetZone}.`);
+
+    if (boostCardsToHold.length === 0) {
+      setMessage(`Moved ${cardLabel(found.card)} to ${targetZone}.`);
+    }
   }
 
   async function toggleExert(card, key) {
@@ -1190,6 +1274,7 @@ if (selectedTypeFilters.length > 0) {
                       tags={player.tags || {}}
                       tokens={player.tokens || {}}
                       attachments={player.attachments || {}}
+                      boosts={player.boosts || {}}
                     />
                   </div>
                 );
@@ -1237,6 +1322,7 @@ if (selectedTypeFilters.length > 0) {
                   tags={me.tags || {}}
                   tokens={me.tokens || {}}
                   attachments={me.attachments || {}}
+                  boosts={me.boosts || {}}
                   onDoubleClickCard={toggleExert}
                   onDropCard={moveCardByKey}
                 />
@@ -1262,6 +1348,18 @@ if (selectedTypeFilters.length > 0) {
                   setSelectedCardKey={setSelectedCardKey}
                   onDropCard={moveCardByKey}
                 />
+
+                {(me.boostHolding || []).length > 0 && (
+                  <Zone
+                    title="Boost Holding"
+                    zoneName="boostHolding"
+                    cards={me.boostHolding || []}
+                    selectedCardKey={selectedCardKey}
+                    setSelectedCard={setSelectedCard}
+                    setSelectedCardKey={setSelectedCardKey}
+                    onDropCard={moveCardByKey}
+                  />
+                )}
               </div>
 
               <p>
@@ -1358,6 +1456,7 @@ if (selectedTypeFilters.length > 0) {
               onRemoveToken={removeCardToken}
               onAssignTo={assignSelectedCardTo}
               onClearAssignment={clearSelectedAssignment}
+              onBoostFromDeck={boostSelectedFromDeck}
             />
           )}
 
@@ -1638,6 +1737,18 @@ if (selectedTypeFilters.length > 0) {
   );
 }
 
+function InkwellCardBack() {
+  return (
+    <div style={inkwellCardBackStyle}>
+      <div style={inkwellCardBackInnerStyle}>
+        <div style={inkwellCardBackSparkleStyle}>✦</div>
+        <div style={inkwellCardBackTitleStyle}>LORCANA</div>
+        <div style={inkwellCardBackSubtitleStyle}>INKWELL</div>
+      </div>
+    </div>
+  );
+}
+
 function CardVisual({
   card,
   isMini = false,
@@ -1645,10 +1756,16 @@ function CardVisual({
   tokens = [],
   assignmentText = "",
   attachedText = "",
+  boostCount = 0,
   isRotated = false,
-  isLocation = false
+  isLocation = false,
+  faceDown = false
 }) {
   const imageUrl = cardImage(card);
+
+  if (faceDown) {
+    return <InkwellCardBack />;
+  }
 
   if (imageUrl) {
     return (
@@ -1679,6 +1796,12 @@ function CardVisual({
             {damageAmount > 0 && (
               <div style={hoverDamageBadgeStyle}>
                 {damageAmount}
+              </div>
+            )}
+
+            {boostCount > 0 && (
+              <div style={hoverBoostBadgeStyle}>
+                ⚡ Boost ×{boostCount}
               </div>
             )}
 
@@ -1721,7 +1844,8 @@ function BoardCardTools({
   onAddToken,
   onRemoveToken,
   onAssignTo,
-  onClearAssignment
+  onClearAssignment,
+  onBoostFromDeck
 }) {
   const selectedTags = tags[selectedCardKey] || [];
   const selectedTokens = tokens[selectedCardKey] || [];
@@ -1798,6 +1922,19 @@ function BoardCardTools({
         )}
       </div>
 
+
+      {selectedTags.includes("Boosted") && (
+        <div style={{ marginTop: "10px" }}>
+          <strong>Boost</strong>
+          <p style={helperTextStyle}>
+            Add the top card of your deck face down under this character.
+          </p>
+          <button onClick={onBoostFromDeck} style={{ ...smallButtonStyle, margin: "4px", background: "#facc15", color: "#111827" }}>
+            Boost from Deck
+          </button>
+        </div>
+      )}
+
       <div style={{ marginTop: "10px" }}>
         <strong>Assign / Attach</strong>
         <p style={helperTextStyle}>
@@ -1836,7 +1973,7 @@ function BoardCardTools({
   );
 }
 
-function MiniCards({ cards, exertedCards = [], damage = {}, tags = {}, tokens = {}, attachments = {} }) {
+function MiniCards({ cards, exertedCards = [], damage = {}, tags = {}, tokens = {}, attachments = {}, boosts = {} }) {
   if (!cards.length) return <p style={{ color: "#9ca3af" }}>Empty</p>;
 
   const entries = cards.map((card, index) => ({
@@ -1884,6 +2021,7 @@ function MiniCards({ cards, exertedCards = [], damage = {}, tags = {}, tokens = 
     const parentName = attachments[key] ? cardNameForKey(attachments[key]) : "";
     const isLocationCard = (tags[key] || []).includes("Location");
     const isExertedCard = exertedCards.includes(key);
+    const boostCount = (boosts[key] || []).length;
 
     return (
       <div
@@ -1901,6 +2039,7 @@ function MiniCards({ cards, exertedCards = [], damage = {}, tags = {}, tokens = 
           card={card}
           isMini
           damageAmount={damage[key] || 0}
+          boostCount={boostCount}
           tokens={tokens[key] || []}
           assignmentText={parentName ? `↳ ${parentName}` : ""}
           attachedText={
@@ -1915,6 +2054,12 @@ function MiniCards({ cards, exertedCards = [], damage = {}, tags = {}, tokens = 
         {(damage[key] || 0) > 0 && (
           <div style={damageBadgeStyle}>
             {damage[key]}
+          </div>
+        )}
+
+        {boostCount > 0 && (
+          <div style={boostCountBadgeStyle}>
+            Boost ×{boostCount}
           </div>
         )}
 
@@ -2009,7 +2154,8 @@ function Zone({
   onDropCard,
   tags = {},
   tokens = {},
-  attachments = {}
+  attachments = {},
+  boosts = {}
 }) {
   return (
     <div
@@ -2037,6 +2183,7 @@ function Zone({
           const cardDamage = damage[key] || 0;
           const cardTags = tags[key] || [];
           const cardTokens = tokens[key] || [];
+          const boostCount = (boosts[key] || []).length;
           const isLocationCard = cardTags.includes("Location");
           const isRotatedCard = exertedCards.includes(key) || isLocationCard;
           const parentCard = cards.find((possibleParent, parentIndex) => cardKey(possibleParent, parentIndex) === attachments[key]);
@@ -2071,7 +2218,9 @@ function Zone({
             >
               <CardVisual
                 card={card}
+                faceDown={(zoneName === "inkwell" || zoneName === "boostHolding") && selectedCardKey !== key}
                 damageAmount={cardDamage}
+                boostCount={boostCount}
                 tokens={cardTokens}
                 assignmentText={parentCard ? `↳ ${cardLabel(parentCard)}` : ""}
                 attachedText={
@@ -2086,6 +2235,12 @@ function Zone({
               {cardDamage > 0 && (
                 <div style={damageBadgeStyle}>
                   {cardDamage}
+                </div>
+              )}
+
+              {boostCount > 0 && (
+                <div style={boostCountBadgeStyle}>
+                  Boost ×{boostCount}
                 </div>
               )}
 
@@ -2396,6 +2551,82 @@ const miniCardImageStyle = {
   objectFit: "contain",
   borderRadius: "6px",
   display: "block"
+};
+
+
+const inkwellCardBackStyle = {
+  width: "100%",
+  height: "100%",
+  minHeight: "168px",
+  borderRadius: "10px",
+  background:
+    "radial-gradient(circle at center, #4c1d95 0%, #312e81 38%, #111827 72%, #020617 100%)",
+  border: "3px solid #facc15",
+  display: "grid",
+  placeItems: "center",
+  color: "#facc15",
+  boxShadow:
+    "inset 0 0 22px rgba(250,204,21,0.35), 0 6px 16px rgba(0,0,0,0.35)",
+  overflow: "hidden"
+};
+
+const inkwellCardBackInnerStyle = {
+  width: "78%",
+  height: "78%",
+  borderRadius: "999px",
+  border: "2px solid rgba(250,204,21,0.75)",
+  display: "grid",
+  placeItems: "center",
+  textAlign: "center",
+  background:
+    "radial-gradient(circle at center, rgba(250,204,21,0.18), rgba(15,23,42,0.1) 55%, rgba(15,23,42,0.45))"
+};
+
+const inkwellCardBackSparkleStyle = {
+  fontSize: "28px",
+  lineHeight: "1"
+};
+
+const inkwellCardBackTitleStyle = {
+  fontWeight: "bold",
+  fontSize: "15px",
+  letterSpacing: "1px"
+};
+
+const inkwellCardBackSubtitleStyle = {
+  fontSize: "10px",
+  letterSpacing: "2px",
+  color: "#fde68a"
+};
+
+
+const boostCountBadgeStyle = {
+  position: "absolute",
+  left: "6px",
+  bottom: "6px",
+  borderRadius: "999px",
+  background: "#581c87",
+  color: "white",
+  padding: "4px 8px",
+  fontSize: "12px",
+  fontWeight: "bold",
+  border: "2px solid #facc15",
+  zIndex: 6
+};
+
+const hoverBoostBadgeStyle = {
+  position: "absolute",
+  top: "70px",
+  right: "10px",
+  padding: "8px 14px",
+  borderRadius: "999px",
+  background: "#facc15",
+  color: "#111827",
+  fontWeight: "bold",
+  fontSize: "18px",
+  border: "2px solid white",
+  boxShadow: "0 8px 20px rgba(0,0,0,0.45)",
+  zIndex: 10000
 };
 
 const deckPileStyle = {

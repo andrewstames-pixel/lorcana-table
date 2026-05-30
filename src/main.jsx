@@ -85,6 +85,57 @@ async function searchLorcastCards(query) {
   }));
 }
 
+function normalizeCardSearchName(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[–—]/g, "-")
+    .replace(/\s+-\s+/g, " - ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+async function findDreambornCard(cardName) {
+  const cleanName = cardName.trim();
+  const [baseName, subtitle] = cleanName.split(/\s+-\s+/, 2);
+
+  const searches = [
+    `\"${cleanName}\"`,
+    cleanName,
+    baseName
+  ].filter(Boolean);
+
+  const seen = new Set();
+  const candidates = [];
+
+  for (const search of searches) {
+    const results = await searchLorcastCards(search);
+
+    for (const card of results) {
+      if (!seen.has(card.id)) {
+        seen.add(card.id);
+        candidates.push(card);
+      }
+    }
+  }
+
+  const wanted = normalizeCardSearchName(cleanName);
+  const wantedBase = normalizeCardSearchName(baseName);
+  const wantedSubtitle = normalizeCardSearchName(subtitle || "");
+
+  return (
+    candidates.find((card) => normalizeCardSearchName(card.name) === wanted) ||
+    candidates.find((card) =>
+      wantedSubtitle &&
+      normalizeCardSearchName(card.name).includes(wantedBase) &&
+      normalizeCardSearchName(card.name).includes(wantedSubtitle)
+    ) ||
+    candidates.find((card) => normalizeCardSearchName(card.simpleName) === wantedBase) ||
+    candidates[0] ||
+    null
+  );
+}
+
 function makeRoomCode() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
@@ -140,6 +191,7 @@ function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [dreambornImportText, setDreambornImportText] = useState("");
   const [isImportingDeck, setIsImportingDeck] = useState(false);
+  const [isImportingTtsDeck, setIsImportingTtsDeck] = useState(false);
 
   const [joinCode, setJoinCode] = useState("");
   const [currentRoom, setCurrentRoom] = useState(null);
@@ -214,13 +266,13 @@ if (selectedTypeFilters.length > 0) {
     setMessage("Importing Dreamborn deck...");
 
     const importedCards = [];
-    const failedCards = [];
+    const missedCards = [];
 
     for (const line of lines) {
       const match = line.match(/^(\d+)\s+(.+)$/);
 
       if (!match) {
-        failedCards.push(line);
+        missedCards.push(line);
         continue;
       }
 
@@ -228,32 +280,86 @@ if (selectedTypeFilters.length > 0) {
       const cardName = match[2].trim();
 
       try {
-        const results = await searchLorcastCards(cardName);
-        const exactMatch =
-          results.find((card) => card.name.toLowerCase() === cardName.toLowerCase()) ||
-          results.find((card) => card.simpleName?.toLowerCase() === cardName.toLowerCase()) ||
-          results[0];
+        const foundCard = await findDreambornCard(cardName);
 
-        if (exactMatch) {
+        if (foundCard) {
           for (let i = 0; i < quantity; i++) {
-            importedCards.push(exactMatch);
+            importedCards.push(foundCard);
           }
         } else {
-          failedCards.push(cardName);
+          missedCards.push(cardName);
         }
       } catch {
-        failedCards.push(cardName);
+        missedCards.push(cardName);
       }
     }
 
     setDeckCards(importedCards);
     setIsImportingDeck(false);
 
-    if (failedCards.length > 0) {
-      setMessage(`Imported ${importedCards.length} card(s). Could not find: ${failedCards.join(", ")}`);
+    if (missedCards.length > 0) {
+      setMessage(
+        `Imported ${importedCards.length} card(s). Missed: ${missedCards.join(", ")}`
+      );
     } else {
       setMessage(`Imported ${importedCards.length} card(s) from Dreamborn.`);
     }
+  }
+
+
+  async function importTtsDeckFile(event) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    setIsImportingTtsDeck(true);
+    setMessage("Importing TTS deck...");
+
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text);
+      const objectStates = json.ObjectStates || [];
+
+      const containedObjects = objectStates.flatMap((state) =>
+        state.ContainedObjects || []
+      );
+
+      const customDeck = objectStates.reduce((acc, state) => {
+        return {
+          ...acc,
+          ...(state.CustomDeck || {})
+        };
+      }, {});
+
+      const importedCards = containedObjects
+        .filter((object) => object.Nickname)
+        .map((object) => {
+          const deckKey = String(Math.floor(Number(object.CardID) / 100));
+          const imageUrl = customDeck[deckKey]?.FaceURL || null;
+          const name = object.Nickname.trim();
+
+          return {
+            id: `tts-${name}-${imageUrl || object.CardID}`,
+            name,
+            simpleName: name.split(" - ")[0],
+            imageUrl
+          };
+        });
+
+      if (importedCards.length === 0) {
+        setMessage("No cards found in that TTS JSON file.");
+      } else {
+        setDeckCards(importedCards);
+        setMessage(`Imported ${importedCards.length} card(s) from TTS JSON.`);
+      }
+    } catch {
+      setMessage("Could not import that TTS JSON file.");
+    }
+
+    setIsImportingTtsDeck(false);
+    event.target.value = "";
   }
 
   function saveCurrentDeck() {
@@ -1041,158 +1147,205 @@ if (selectedTypeFilters.length > 0) {
 
         <hr style={{ margin: "30px 0" }} />
 
-        <h2>Card Search Deck Builder</h2>
+        <h2>Deck Manager</h2>
 
-        <input
-          value={deckName}
-          onChange={(e) => setDeckName(e.target.value)}
-          placeholder="Deck name, like Ruby/Steel"
-          style={inputStyle}
-        />
+        <div style={deckManagerGridStyle}>
+          <div style={sectionStyle}>
+            <h3>1. Choose a Saved Deck</h3>
+            <p style={helperTextStyle}>
+              Pick a saved deck before creating or joining a room.
+            </p>
 
-        <h3>Import from Dreamborn</h3>
+            {Object.keys(savedDecks).length === 0 ? (
+              <p style={helperTextStyle}>No saved decks yet. Import or build one below.</p>
+            ) : (
+              <div style={savedDecksStyle}>
+                {Object.entries(savedDecks).map(([name, cards]) => (
+                  <button
+                    key={name}
+                    onClick={() => loadSelectedDeck(name)}
+                    style={{
+                      ...savedDeckButtonStyle,
+                      borderColor:
+                        selectedSavedDeckName === name ? "#facc15" : "#374151"
+                    }}
+                  >
+                    <strong>{name}</strong>
+                    <span>{cards.length} card(s)</span>
+                    <small>{selectedSavedDeckName === name ? "Selected" : "Click to use"}</small>
+                  </button>
+                ))}
+              </div>
+            )}
 
-        <textarea
-          value={dreambornImportText}
-          onChange={(e) => setDreambornImportText(e.target.value)}
-          placeholder={"Paste Dreamborn export here, like:\n4 Woody - Leader of the Toys\n2 Be Our Guest"}
-          style={textareaStyle}
-        />
-
-        <button onClick={importDreambornDeck} style={buttonStyle}>
-          {isImportingDeck ? "Importing..." : "Import Dreamborn Deck"}
-        </button>
-
-        <div>
-  <input
-    value={cardSearch}
-    onChange={(e) => setCardSearch(e.target.value)}
-    placeholder="Search card, like Mickey Mouse"
-    style={inputStyle}
-  />
-
-  <div style={{ margin: "10px 0" }}>
-  <p>Ink Filters</p>
-  {INK_FILTERS.map((ink) => (
-    <button
-      key={ink}
-      onClick={() =>
-        setSelectedInkFilters((current) =>
-          current.includes(ink)
-            ? current.filter((i) => i !== ink)
-            : [...current, ink]
-        )
-      }
-      style={{
-        ...smallButtonStyle,
-        margin: "4px",
-        background: selectedInkFilters.includes(ink) ? "#facc15" : "#374151",
-        color: selectedInkFilters.includes(ink) ? "#111827" : "white"
-      }}
-    >
-      {ink}
-    </button>
-  ))}
-
-  <p>Type Filters</p>
-  {TYPE_FILTERS.map((type) => (
-    <button
-      key={type}
-      onClick={() =>
-        setSelectedTypeFilters((current) =>
-          current.includes(type)
-            ? current.filter((t) => t !== type)
-            : [...current, type]
-        )
-      }
-      style={{
-        ...smallButtonStyle,
-        margin: "4px",
-        background: selectedTypeFilters.includes(type) ? "#facc15" : "#374151",
-        color: selectedTypeFilters.includes(type) ? "#111827" : "white"
-      }}
-    >
-      {type}
-    </button>
-  ))}
-</div>
-
-  <button onClick={runCardSearch} style={buttonStyle}>
-    {isSearching ? "Searching..." : "Search Cards"}
-  </button>
-</div>
-
-        <div style={searchResultsStyle}>
-          {searchResults.map((card) => (
-            <button
-              key={card.id}
-              onClick={() => addCardToDeck(card)}
-              style={searchCardStyle}
+            <select
+              value={selectedSavedDeckName}
+              onChange={(e) => loadSelectedDeck(e.target.value)}
+              style={inputStyle}
             >
-              {card.imageUrl ? (
-                <img src={card.imageUrl} alt={card.name} style={searchCardImageStyle} />
-              ) : (
-                <span>{card.name}</span>
-              )}
-              <strong>{card.name}</strong>
-              <small>Click to add</small>
+              <option value="">Choose saved deck</option>
+              {Object.keys(savedDecks).map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+
+            <button onClick={deleteSelectedDeck} style={buttonStyle}>
+              Delete Selected Deck
             </button>
-          ))}
+          </div>
+
+          <div style={sectionStyle}>
+            <h3>2. Import a Dreamborn TTS Deck</h3>
+            <p style={helperTextStyle}>
+              In Dreamborn, export/download the Tabletop Simulator / TTS JSON file,
+              then upload it here.
+            </p>
+
+            <input
+              value={deckName}
+              onChange={(e) => setDeckName(e.target.value)}
+              placeholder="Deck name, like Ruby/Steel Toys"
+              style={inputStyle}
+            />
+
+            <input
+              type="file"
+              accept=".json,application/json"
+              onChange={importTtsDeckFile}
+              style={inputStyle}
+            />
+
+            {isImportingTtsDeck && <p>Importing TTS deck...</p>}
+
+            <button onClick={saveCurrentDeck} style={buttonStyle}>
+              Save Current Deck
+            </button>
+          </div>
         </div>
 
-        <h3>Current Deck: {deckCards.length} card(s)</h3>
+        <div style={sectionStyle}>
+          <h3>3. Build or Edit a Deck Manually</h3>
+          <p style={helperTextStyle}>
+            Search cards, use filters, and add exact card images to the current deck.
+          </p>
 
-<div style={deckListStyle}>
-  {Object.entries(
-    deckCards.reduce((acc, card) => {
-      acc[card.id] = acc[card.id] || { card, count: 0 };
-      acc[card.id].count += 1;
-      return acc;
-    }, {})
-  ).map(([id, { card, count }]) => (
-    <div key={id} style={deckListItemStyle}>
-      <span>{count}x {card.name}</span>
-      <div>
-        <button
-          onClick={() => {
-            const indexToRemove = deckCards.findIndex((c) => c.id === card.id);
-            if (indexToRemove !== -1) removeDeckCard(indexToRemove);
-          }}
-          style={smallButtonStyle}
-        >
-          -
-        </button>
-        <button
-          onClick={() => addCardToDeck(card)}
-          style={smallButtonStyle}
-        >
-          +
-        </button>
-      </div>
-    </div>
-  ))}
-</div>
+          <div>
+            <input
+              value={cardSearch}
+              onChange={(e) => setCardSearch(e.target.value)}
+              placeholder="Search card, like Mickey Mouse"
+              style={inputStyle}
+            />
 
-        <button onClick={saveCurrentDeck} style={buttonStyle}>
-          Save Deck
-        </button>
+            <div style={{ margin: "10px 0" }}>
+              <p>Ink Filters</p>
+              {INK_FILTERS.map((ink) => (
+                <button
+                  key={ink}
+                  onClick={() =>
+                    setSelectedInkFilters((current) =>
+                      current.includes(ink)
+                        ? current.filter((i) => i !== ink)
+                        : [...current, ink]
+                    )
+                  }
+                  style={{
+                    ...smallButtonStyle,
+                    margin: "4px",
+                    background: selectedInkFilters.includes(ink) ? "#facc15" : "#374151",
+                    color: selectedInkFilters.includes(ink) ? "#111827" : "white"
+                  }}
+                >
+                  {ink}
+                </button>
+              ))}
 
-        <select
-          value={selectedSavedDeckName}
-          onChange={(e) => loadSelectedDeck(e.target.value)}
-          style={inputStyle}
-        >
-          <option value="">Choose saved deck</option>
-          {Object.keys(savedDecks).map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </select>
+              <p>Type Filters</p>
+              {TYPE_FILTERS.map((type) => (
+                <button
+                  key={type}
+                  onClick={() =>
+                    setSelectedTypeFilters((current) =>
+                      current.includes(type)
+                        ? current.filter((t) => t !== type)
+                        : [...current, type]
+                    )
+                  }
+                  style={{
+                    ...smallButtonStyle,
+                    margin: "4px",
+                    background: selectedTypeFilters.includes(type) ? "#facc15" : "#374151",
+                    color: selectedTypeFilters.includes(type) ? "#111827" : "white"
+                  }}
+                >
+                  {type}
+                </button>
+              ))}
+            </div>
 
-        <button onClick={deleteSelectedDeck} style={buttonStyle}>
-          Delete Selected Deck
-        </button>
+            <button onClick={runCardSearch} style={buttonStyle}>
+              {isSearching ? "Searching..." : "Search Cards"}
+            </button>
+          </div>
+
+          <div style={searchResultsStyle}>
+            {searchResults.map((card) => (
+              <button
+                key={card.id}
+                onClick={() => addCardToDeck(card)}
+                style={searchCardStyle}
+              >
+                {card.imageUrl ? (
+                  <img src={card.imageUrl} alt={card.name} style={searchCardImageStyle} />
+                ) : (
+                  <span>{card.name}</span>
+                )}
+                <strong>{card.name}</strong>
+                <small>Click to add</small>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={sectionStyle}>
+          <h3>Current Deck: {deckCards.length} card(s)</h3>
+          <p style={helperTextStyle}>
+            Name the deck and click Save Current Deck when you're happy with it.
+          </p>
+
+          <div style={deckListStyle}>
+            {Object.entries(
+              deckCards.reduce((acc, card) => {
+                acc[card.id] = acc[card.id] || { card, count: 0 };
+                acc[card.id].count += 1;
+                return acc;
+              }, {})
+            ).map(([id, { card, count }]) => (
+              <div key={id} style={deckListItemStyle}>
+                <span>{count}x {card.name}</span>
+                <div>
+                  <button
+                    onClick={() => {
+                      const indexToRemove = deckCards.findIndex((c) => c.id === card.id);
+                      if (indexToRemove !== -1) removeDeckCard(indexToRemove);
+                    }}
+                    style={smallButtonStyle}
+                  >
+                    -
+                  </button>
+                  <button
+                    onClick={() => addCardToDeck(card)}
+                    style={smallButtonStyle}
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
 
         <hr style={{ margin: "30px 0" }} />
 
@@ -1584,6 +1737,46 @@ const smallButtonStyle = {
   cursor: "pointer"
 };
 
+const sectionStyle = {
+  border: "1px solid #374151",
+  borderRadius: "16px",
+  padding: "18px",
+  background: "#020617",
+  margin: "18px 0"
+};
+
+const deckManagerGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+  gap: "16px",
+  alignItems: "start"
+};
+
+const savedDecksStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  gap: "10px",
+  margin: "12px 0"
+};
+
+const savedDeckButtonStyle = {
+  border: "2px solid #374151",
+  borderRadius: "12px",
+  background: "#111827",
+  color: "white",
+  padding: "12px",
+  cursor: "pointer",
+  display: "grid",
+  gap: "6px",
+  textAlign: "left"
+};
+
+const helperTextStyle = {
+  color: "#cbd5e1",
+  fontSize: "14px",
+  lineHeight: "1.4"
+};
+
 const buttonStyle = {
   padding: "12px 20px",
   borderRadius: "10px",
@@ -1603,7 +1796,7 @@ const inputStyle = {
 
 const textareaStyle = {
   width: "90%",
-  minHeight: "150px",
+  minHeight: "180px",
   padding: "12px",
   borderRadius: "10px",
   border: "1px solid #374151",

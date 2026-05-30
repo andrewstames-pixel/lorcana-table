@@ -906,6 +906,13 @@ if (selectedTypeFilters.length > 0) {
             Room: <span style={{ color: "#facc15" }}>{currentRoom.code}</span>
           </h2>
 
+          <h3>
+            Current Turn:{" "}
+            <span style={{ color: players[currentTurnPlayerId]?.color || "#facc15" }}>
+              {players[currentTurnPlayerId]?.username || "Waiting..."}
+            </span>
+          </h3>
+
           {rollMessage && (
             <div style={rollPanelStyle}>
               <h3>🎲 Roll for First Player</h3>
@@ -933,48 +940,22 @@ if (selectedTypeFilters.length > 0) {
           )}
 
           <div style={roomMainLayoutStyle}>
-            <div style={playerSidebarStyle}>
-              <h3>Players</h3>
-              {playerList.map(([id, player]) => {
-                const isCurrentTurn = id === currentTurnPlayerId;
-
-                return (
-                  <div
-                    key={id}
-                    style={{
-                      ...playerSidebarRowStyle,
-                      borderColor: player.color || "#374151",
-                      boxShadow: isCurrentTurn
-                        ? `0 0 14px ${player.color || "#facc15"}`
-                        : "none"
-                    }}
-                  >
-                    <div>
-                      <div
-                        style={{
-                          color: player.color || "white",
-                          fontWeight: "bold"
-                        }}
-                      >
-                        {player.username}
-                      </div>
-
-                      {isCurrentTurn && (
-                        <small style={{ color: "#facc15", fontWeight: "bold" }}>
-                          Current Turn
-                        </small>
-                      )}
-                    </div>
-
-                    <div style={playerLoreBadgeStyle}>
-                      <span style={{ fontSize: "22px", fontWeight: "bold" }}>
-                        {player.lore}
-                      </span>
-                      <small>Lore</small>
-                    </div>
-                  </div>
-                );
-              })}
+            <div style={loreSidebarStyle}>
+              <h3>Lore</h3>
+              {playerList.map(([id, player]) => (
+                <div
+                  key={id}
+                  style={{
+                    ...loreRowStyle,
+                    borderColor: player.color || "#374151"
+                  }}
+                >
+                  <span style={{ color: player.color || "white", fontWeight: "bold" }}>
+                    {player.username}
+                  </span>
+                  <span>{player.lore}</span>
+                </div>
+              ))}
             </div>
 
             <div style={playersGridStyle}>
@@ -995,6 +976,12 @@ if (selectedTypeFilters.length > 0) {
                     <h3 style={{ color: player.color || "white" }}>
                       {player.username}
                     </h3>
+
+                    {isCurrentTurn && (
+                      <p style={{ color: player.color || "#facc15", fontWeight: "bold" }}>
+                        Current Turn
+                      </p>
+                    )}
 
                     <MiniCards
                       cards={player.board}
@@ -1621,36 +1608,25 @@ const roomMainLayoutStyle = {
   marginTop: "20px"
 };
 
-const playerSidebarStyle = {
+const loreSidebarStyle = {
   border: "1px solid #374151",
   borderRadius: "12px",
   padding: "12px",
   background: "#020617",
   position: "sticky",
-  top: "12px",
-  textAlign: "left"
+  top: "12px"
 };
 
-const playerSidebarRowStyle = {
+const loreRowStyle = {
   display: "flex",
   justifyContent: "space-between",
   alignItems: "center",
   gap: "10px",
   borderLeft: "4px solid #374151",
-  borderRadius: "10px",
+  borderRadius: "8px",
   background: "#111827",
-  padding: "10px",
-  marginBottom: "10px"
-};
-
-const playerLoreBadgeStyle = {
-  minWidth: "56px",
-  borderRadius: "10px",
-  background: "#1f2937",
-  display: "grid",
-  placeItems: "center",
-  padding: "6px",
-  color: "#facc15"
+  padding: "8px 10px",
+  marginBottom: "8px"
 };
 
 const playersGridStyle = {

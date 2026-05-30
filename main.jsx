@@ -906,6 +906,13 @@ if (selectedTypeFilters.length > 0) {
             Room: <span style={{ color: "#facc15" }}>{currentRoom.code}</span>
           </h2>
 
+          <h3>
+            Current Turn:{" "}
+            <span style={{ color: players[currentTurnPlayerId]?.color || "#facc15" }}>
+              {players[currentTurnPlayerId]?.username || "Waiting..."}
+            </span>
+          </h3>
+
           {rollMessage && (
             <div style={rollPanelStyle}>
               <h3>🎲 Roll for First Player</h3>
@@ -932,79 +939,60 @@ if (selectedTypeFilters.length > 0) {
             </div>
           )}
 
-          <div style={roomMainLayoutStyle}>
-            <div style={playerSidebarStyle}>
-              <h3>Players</h3>
-              {playerList.map(([id, player]) => {
-                const isCurrentTurn = id === currentTurnPlayerId;
+          <div style={playersGridStyle}>
+            {playerList.map(([id, player]) => {
+              const isCurrentTurn = id === currentTurnPlayerId;
 
-                return (
-                  <div
-                    key={id}
-                    style={{
-                      ...playerSidebarRowStyle,
-                      borderColor: player.color || "#374151",
-                      boxShadow: isCurrentTurn
-                        ? `0 0 14px ${player.color || "#facc15"}`
-                        : "none"
-                    }}
-                  >
-                    <div>
-                      <div
-                        style={{
-                          color: player.color || "white",
-                          fontWeight: "bold"
-                        }}
-                      >
-                        {player.username}
-                      </div>
+              return (
+                <div
+                  key={id}
+                  style={{
+                    ...seatStyle,
+                    borderColor: player.color || "#374151",
+                    boxShadow: isCurrentTurn
+                      ? `0 0 20px ${player.color || "#facc15"}`
+                      : "none"
+                  }}
+                >
+                  <h3 style={{ color: player.color || "white" }}>
+                    {player.username}
+                  </h3>
 
-                      {isCurrentTurn && (
-                        <small style={{ color: "#facc15", fontWeight: "bold" }}>
-                          Current Turn
-                        </small>
-                      )}
-                    </div>
+                  {isCurrentTurn && (
+                    <p style={{ color: player.color || "#facc15", fontWeight: "bold" }}>
+                      Current Turn
+                    </p>
+                  )}
 
-                    <div style={playerLoreBadgeStyle}>
-                      <span style={{ fontSize: "22px", fontWeight: "bold" }}>
-                        {player.lore}
-                      </span>
-                      <small>Lore</small>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  <p>Lore: {player.lore}</p>
 
-            <div style={playersGridStyle}>
-              {playerList.map(([id, player]) => {
-                const isCurrentTurn = id === currentTurnPlayerId;
+                  <p>
+                    Hand:{" "}
+                    {id === playerId
+                      ? player.hand.length
+                      : `${player.hand.length} hidden`}
+                    <br />
+                    Deck: {player.deck?.length || 0}
+                  </p>
 
-                return (
-                  <div
-                    key={id}
-                    style={{
-                      ...seatStyle,
-                      borderColor: player.color || "#374151",
-                      boxShadow: isCurrentTurn
-                        ? `0 0 20px ${player.color || "#facc15"}`
-                        : "none"
-                    }}
-                  >
-                    <h3 style={{ color: player.color || "white" }}>
-                      {player.username}
-                    </h3>
+                  <h4>Board</h4>
+                  <MiniCards
+                    cards={player.board}
+                    exertedCards={player.exerted || []}
+                    damage={player.damage || {}}
+                  />
 
-                    <MiniCards
-                      cards={player.board}
-                      exertedCards={player.exerted || []}
-                      damage={player.damage || {}}
-                    />
-                  </div>
-                );
-              })}
-            </div>
+                  <h4>Inkwell</h4>
+                  <MiniCards
+                    cards={player.inkwell}
+                    exertedCards={player.exerted || []}
+                  />
+
+                  <h4>Discard</h4>
+                  <MiniCards cards={player.discard} />
+                </div>
+              );
+            })}
           </div>
 
           {me && (
@@ -1439,13 +1427,15 @@ function CardVisual({ card, isMini = false }) {
           style={isMini ? miniCardImageStyle : cardImageStyle}
         />
 
-        <div className="card-hover-preview">
-          <img
-            src={imageUrl}
-            alt={cardLabel(card)}
-            style={hoverPreviewImageStyle}
-          />
-        </div>
+        {!isMini && (
+          <div className="card-hover-preview">
+            <img
+              src={imageUrl}
+              alt={cardLabel(card)}
+              style={hoverPreviewImageStyle}
+            />
+          </div>
+        )}
       </>
     );
   }
@@ -1466,10 +1456,7 @@ function MiniCards({ cards, exertedCards = [], damage = {} }) {
             key={key}
             style={{
               ...miniCardStyle,
-              transform: exertedCards.includes(key)
-  ? "rotate(90deg) scale(0.9)"
-  : "none",
-overflow: "visible"
+              transform: exertedCards.includes(key) ? "rotate(90deg)" : "none"
             }}
           >
             <CardVisual card={card} isMini />
@@ -1613,50 +1600,11 @@ const rollResultStyle = {
   border: "1px solid #374151"
 };
 
-const roomMainLayoutStyle = {
-  display: "grid",
-  gridTemplateColumns: "180px 1fr",
-  gap: "16px",
-  alignItems: "start",
-  marginTop: "20px"
-};
-
-const playerSidebarStyle = {
-  border: "1px solid #374151",
-  borderRadius: "12px",
-  padding: "12px",
-  background: "#020617",
-  position: "sticky",
-  top: "12px",
-  textAlign: "left"
-};
-
-const playerSidebarRowStyle = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: "10px",
-  borderLeft: "4px solid #374151",
-  borderRadius: "10px",
-  background: "#111827",
-  padding: "10px",
-  marginBottom: "10px"
-};
-
-const playerLoreBadgeStyle = {
-  minWidth: "56px",
-  borderRadius: "10px",
-  background: "#1f2937",
-  display: "grid",
-  placeItems: "center",
-  padding: "6px",
-  color: "#facc15"
-};
-
 const playersGridStyle = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-  gap: "12px"
+  gap: "12px",
+  marginTop: "20px"
 };
 
 const seatStyle = {
@@ -1757,7 +1705,7 @@ const miniCardStyle = {
   display: "grid",
   placeItems: "center",
   position: "relative",
-  overflow: "visible"
+  overflow: "hidden"
 };
 
 const miniCardImageStyle = {
@@ -1923,8 +1871,7 @@ hoverStyle.textContent = `
     display: none;
   }
 
-  button:hover > .card-hover-preview,
-  div:hover > .card-hover-preview {
+  button:hover .card-hover-preview {
     display: block;
   }
 `;

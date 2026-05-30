@@ -18,6 +18,20 @@ const PLAYER_COLORS = [
   { name: "White", value: "#e5e7eb", emoji: "⚪" }
 ];
 
+const INK_FILTERS = [
+  "Amber",
+  "Amethyst",
+  "Emerald",
+  "Ruby",
+  "Sapphire",
+  "Steel"
+];
+const TYPE_FILTERS = [
+  "Character",
+  "Action",
+  "Item",
+  "Location"
+];
 function cardLabel(card) {
   return typeof card === "string" ? card : card.name;
 }
@@ -119,8 +133,13 @@ function App() {
   const [selectedSavedDeckName, setSelectedSavedDeckName] = useState("");
 
   const [cardSearch, setCardSearch] = useState("");
+  const [selectedInkFilters, setSelectedInkFilters] = useState([]);
+  const [selectedTypeFilters, setSelectedTypeFilters] = useState([]);
+
   const [searchResults, setSearchResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [dreambornImportText, setDreambornImportText] = useState("");
+  const [isImportingDeck, setIsImportingDeck] = useState(false);
 
   const [joinCode, setJoinCode] = useState("");
   const [currentRoom, setCurrentRoom] = useState(null);
@@ -133,25 +152,44 @@ function App() {
   const [rollResults, setRollResults] = useState([]);
   const [rollMessage, setRollMessage] = useState("");
 
-  async function runCardSearch() {
-    if (!cardSearch.trim()) {
-      setMessage("Type a card name to search.");
-      return;
-    }
-
-    setIsSearching(true);
-    setMessage("");
-
-    try {
-      const results = await searchLorcastCards(cardSearch.trim());
-      setSearchResults(results);
-      setMessage(`Found ${results.length} card(s).`);
-    } catch {
-      setMessage("Card search failed. Try again.");
-    }
-
-    setIsSearching(false);
+ async function runCardSearch() {
+  if (!cardSearch.trim()) {
+    setMessage("Type a card name to search.");
+    return;
   }
+
+  setIsSearching(true);
+  setMessage("");
+
+  try {
+    let query = cardSearch.trim();
+
+    if (selectedInkFilters.length > 0) {
+  query +=
+    " " +
+    selectedInkFilters
+      .map((ink) => `ink:${ink.toLowerCase()}`)
+      .join(" ");
+}
+
+if (selectedTypeFilters.length > 0) {
+  query +=
+    " " +
+    selectedTypeFilters
+      .map((type) => `type:${type.toLowerCase()}`)
+      .join(" ");
+}
+
+    const results = await searchLorcastCards(query);
+
+    setSearchResults(results);
+    setMessage(`Found ${results.length} card(s).`);
+  } catch {
+    setMessage("Card search failed. Try again.");
+  }
+
+  setIsSearching(false);
+}
 
   function addCardToDeck(card) {
     setDeckCards((cards) => [...cards, card]);
@@ -159,6 +197,63 @@ function App() {
 
   function removeDeckCard(indexToRemove) {
     setDeckCards((cards) => cards.filter((_, index) => index !== indexToRemove));
+  }
+
+  async function importDreambornDeck() {
+    const lines = dreambornImportText
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    if (lines.length === 0) {
+      setMessage("Paste a Dreamborn deck list first.");
+      return;
+    }
+
+    setIsImportingDeck(true);
+    setMessage("Importing Dreamborn deck...");
+
+    const importedCards = [];
+    const failedCards = [];
+
+    for (const line of lines) {
+      const match = line.match(/^(\d+)\s+(.+)$/);
+
+      if (!match) {
+        failedCards.push(line);
+        continue;
+      }
+
+      const quantity = Number(match[1]);
+      const cardName = match[2].trim();
+
+      try {
+        const results = await searchLorcastCards(cardName);
+        const exactMatch =
+          results.find((card) => card.name.toLowerCase() === cardName.toLowerCase()) ||
+          results.find((card) => card.simpleName?.toLowerCase() === cardName.toLowerCase()) ||
+          results[0];
+
+        if (exactMatch) {
+          for (let i = 0; i < quantity; i++) {
+            importedCards.push(exactMatch);
+          }
+        } else {
+          failedCards.push(cardName);
+        }
+      } catch {
+        failedCards.push(cardName);
+      }
+    }
+
+    setDeckCards(importedCards);
+    setIsImportingDeck(false);
+
+    if (failedCards.length > 0) {
+      setMessage(`Imported ${importedCards.length} card(s). Could not find: ${failedCards.join(", ")}`);
+    } else {
+      setMessage(`Imported ${importedCards.length} card(s) from Dreamborn.`);
+    }
   }
 
   function saveCurrentDeck() {
@@ -955,18 +1050,77 @@ function App() {
           style={inputStyle}
         />
 
-        <div>
-          <input
-            value={cardSearch}
-            onChange={(e) => setCardSearch(e.target.value)}
-            placeholder="Search card, like Mickey Mouse"
-            style={inputStyle}
-          />
+        <h3>Import from Dreamborn</h3>
 
-          <button onClick={runCardSearch} style={buttonStyle}>
-            {isSearching ? "Searching..." : "Search Cards"}
-          </button>
-        </div>
+        <textarea
+          value={dreambornImportText}
+          onChange={(e) => setDreambornImportText(e.target.value)}
+          placeholder={"Paste Dreamborn export here, like:\n4 Woody - Leader of the Toys\n2 Be Our Guest"}
+          style={textareaStyle}
+        />
+
+        <button onClick={importDreambornDeck} style={buttonStyle}>
+          {isImportingDeck ? "Importing..." : "Import Dreamborn Deck"}
+        </button>
+
+        <div>
+  <input
+    value={cardSearch}
+    onChange={(e) => setCardSearch(e.target.value)}
+    placeholder="Search card, like Mickey Mouse"
+    style={inputStyle}
+  />
+
+  <div style={{ margin: "10px 0" }}>
+  <p>Ink Filters</p>
+  {INK_FILTERS.map((ink) => (
+    <button
+      key={ink}
+      onClick={() =>
+        setSelectedInkFilters((current) =>
+          current.includes(ink)
+            ? current.filter((i) => i !== ink)
+            : [...current, ink]
+        )
+      }
+      style={{
+        ...smallButtonStyle,
+        margin: "4px",
+        background: selectedInkFilters.includes(ink) ? "#facc15" : "#374151",
+        color: selectedInkFilters.includes(ink) ? "#111827" : "white"
+      }}
+    >
+      {ink}
+    </button>
+  ))}
+
+  <p>Type Filters</p>
+  {TYPE_FILTERS.map((type) => (
+    <button
+      key={type}
+      onClick={() =>
+        setSelectedTypeFilters((current) =>
+          current.includes(type)
+            ? current.filter((t) => t !== type)
+            : [...current, type]
+        )
+      }
+      style={{
+        ...smallButtonStyle,
+        margin: "4px",
+        background: selectedTypeFilters.includes(type) ? "#facc15" : "#374151",
+        color: selectedTypeFilters.includes(type) ? "#111827" : "white"
+      }}
+    >
+      {type}
+    </button>
+  ))}
+</div>
+
+  <button onClick={runCardSearch} style={buttonStyle}>
+    {isSearching ? "Searching..." : "Search Cards"}
+  </button>
+</div>
 
         <div style={searchResultsStyle}>
           {searchResults.map((card) => (
@@ -1001,7 +1155,7 @@ function App() {
       <div>
         <button
           onClick={() => {
-            const indexToRemove = deckCards.findIndex((c) => c.instanceId === card.instanceId);
+            const indexToRemove = deckCards.findIndex((c) => c.id === card.id);
             if (indexToRemove !== -1) removeDeckCard(indexToRemove);
           }}
           style={smallButtonStyle}
@@ -1405,7 +1559,7 @@ const searchCardImageStyle = {
 };
 
 const deckListStyle = {
-  maxHeight: "220px",
+  height: "500px",
   overflowY: "auto",
   border: "1px solid #374151",
   borderRadius: "12px",
@@ -1444,6 +1598,17 @@ const inputStyle = {
   padding: "12px",
   borderRadius: "10px",
   border: "1px solid #374151",
+  marginBottom: "10px"
+};
+
+const textareaStyle = {
+  width: "90%",
+  minHeight: "150px",
+  padding: "12px",
+  borderRadius: "10px",
+  border: "1px solid #374151",
+  background: "#020617",
+  color: "white",
   marginBottom: "10px"
 };
 

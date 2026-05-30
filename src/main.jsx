@@ -1634,7 +1634,15 @@ if (selectedTypeFilters.length > 0) {
   );
 }
 
-function CardVisual({ card, isMini = false }) {
+function CardVisual({
+  card,
+  isMini = false,
+  damageAmount = 0,
+  tags = [],
+  tokens = [],
+  assignmentText = "",
+  attachedText = ""
+}) {
   const imageUrl = cardImage(card);
 
   if (imageUrl) {
@@ -1646,12 +1654,48 @@ function CardVisual({ card, isMini = false }) {
           style={isMini ? miniCardImageStyle : cardImageStyle}
         />
 
-        <div className="card-hover-preview">
-          <img
-            src={imageUrl}
-            alt={cardLabel(card)}
-            style={hoverPreviewImageStyle}
-          />
+        <div className="card-hover-preview" style={hoverPreviewPanelStyle}>
+          <div style={hoverPreviewCardWrapStyle}>
+            <img
+              src={imageUrl}
+              alt={cardLabel(card)}
+              style={hoverPreviewImageStyle}
+            />
+
+            {damageAmount > 0 && (
+              <div style={hoverDamageBadgeStyle}>
+                {damageAmount}
+              </div>
+            )}
+
+            {(tags.length > 0 || tokens.length > 0 || assignmentText || attachedText) && (
+              <div style={hoverMetaPanelStyle}>
+                {tags.length > 0 && (
+                  <div style={hoverMetaRowStyle}>
+                    {tags.map((tag) => (
+                      <span key={tag} style={hoverTagBadgeStyle}>{tag}</span>
+                    ))}
+                  </div>
+                )}
+
+                {tokens.length > 0 && (
+                  <div style={hoverMetaRowStyle}>
+                    {tokens.map((token) => (
+                      <span key={token} style={hoverTokenBadgeStyle}>{token}</span>
+                    ))}
+                  </div>
+                )}
+
+                {assignmentText && (
+                  <div style={hoverAssignmentTextStyle}>{assignmentText}</div>
+                )}
+
+                {attachedText && (
+                  <div style={hoverAssignmentTextStyle}>{attachedText}</div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </>
     );
@@ -1845,7 +1889,19 @@ function MiniCards({ cards, exertedCards = [], damage = {}, tags = {}, tokens = 
           overflow: "visible"
         }}
       >
-        <CardVisual card={card} isMini />
+        <CardVisual
+  card={card}
+  isMini
+  damageAmount={damage[key] || 0}
+  tags={tags[key] || []}
+  tokens={tokens[key] || []}
+  assignmentText={parentName ? `↳ ${parentName}` : ""}
+  attachedText={
+    attachedChildren.length > 0
+      ? `+ ${attachedChildren.map((child) => cardLabel(child.card)).join(", ")}`
+      : ""
+  }
+/>
 
         {(damage[key] || 0) > 0 && (
           <div style={damageBadgeStyle}>
@@ -2010,7 +2066,18 @@ function Zone({
                 transform: exertedCards.includes(key) ? "rotate(90deg)" : "none"
               }}
             >
-              <CardVisual card={card} />
+              <CardVisual
+                card={card}
+                damageAmount={cardDamage}
+                tags={cardTags}
+                tokens={cardTokens}
+                assignmentText={parentCard ? `↳ ${cardLabel(parentCard)}` : ""}
+                attachedText={
+                  attachedChildren.length > 0
+                    ? `+ ${attachedChildren.map((child) => cardLabel(child)).join(", ")}`
+                    : ""
+                }
+              />
 
               {cardDamage > 0 && (
                 <div style={damageBadgeStyle}>
@@ -2192,18 +2259,91 @@ const cardImageStyle = {
   display: "block"
 };
 
-const hoverPreviewImageStyle = {
+const hoverPreviewPanelStyle = {
   position: "fixed",
   right: "20px",
   top: "20px",
+  zIndex: 9999,
+  pointerEvents: "none"
+};
+
+const hoverPreviewCardWrapStyle = {
+  position: "relative",
+  width: "350px",
+  maxWidth: "40vw"
+};
+
+const hoverPreviewImageStyle = {
   width: "350px",
   maxHeight: "80vh",
   objectFit: "contain",
   border: "3px solid #facc15",
   borderRadius: "12px",
   background: "#111827",
-  zIndex: 9999,
-  pointerEvents: "none"
+  display: "block"
+};
+
+const hoverDamageBadgeStyle = {
+  position: "absolute",
+  top: "10px",
+  right: "10px",
+  minWidth: "52px",
+  height: "52px",
+  borderRadius: "999px",
+  background: "#ef4444",
+  color: "white",
+  display: "grid",
+  placeItems: "center",
+  fontWeight: "bold",
+  fontSize: "26px",
+  border: "3px solid white",
+  boxShadow: "0 8px 20px rgba(0,0,0,0.45)"
+};
+
+const hoverMetaPanelStyle = {
+  position: "absolute",
+  left: "10px",
+  right: "10px",
+  bottom: "10px",
+  display: "grid",
+  gap: "6px",
+  justifyItems: "center",
+  background: "rgba(15, 23, 42, 0.88)",
+  borderRadius: "10px",
+  padding: "8px",
+  border: "1px solid rgba(250, 204, 21, 0.55)"
+};
+
+const hoverMetaRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "6px",
+  justifyContent: "center"
+};
+
+const hoverTagBadgeStyle = {
+  borderRadius: "999px",
+  background: "#1d4ed8",
+  color: "white",
+  padding: "4px 9px",
+  fontSize: "13px",
+  fontWeight: "bold"
+};
+
+const hoverTokenBadgeStyle = {
+  borderRadius: "999px",
+  background: "#7c2d12",
+  color: "white",
+  padding: "4px 9px",
+  fontSize: "13px",
+  fontWeight: "bold"
+};
+
+const hoverAssignmentTextStyle = {
+  color: "#e5e7eb",
+  fontSize: "13px",
+  fontWeight: "bold",
+  textAlign: "center"
 };
 
 const damageBadgeStyle = {

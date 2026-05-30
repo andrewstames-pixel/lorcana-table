@@ -636,6 +636,37 @@ if (selectedTypeFilters.length > 0) {
     setSelectedMulliganCards((cards) => cards.filter((c) => c !== selectedCardKey));
   }
 
+
+  async function moveCardByKey(draggedCardKey, targetZone) {
+    const me = players[playerId];
+    if (!me || !draggedCardKey) return;
+
+    const found = findCardInZones(me, draggedCardKey);
+    if (!found) return;
+
+    const nextMe = {
+      ...me,
+      hand: removeCardFromZone(me.hand, draggedCardKey),
+      board: removeCardFromZone(me.board, draggedCardKey),
+      inkwell: removeCardFromZone(me.inkwell, draggedCardKey),
+      discard: removeCardFromZone(me.discard, draggedCardKey),
+      exerted: (me.exerted || []).filter((c) => c !== draggedCardKey),
+      damage: { ...(me.damage || {}) }
+    };
+
+    if (targetZone !== "board") {
+      delete nextMe.damage[draggedCardKey];
+    }
+
+    nextMe[targetZone] = [...nextMe[targetZone], found.card];
+
+    await updateMe(nextMe);
+    setSelectedCard(found.card);
+    setSelectedCardKey(cardKey(found.card, nextMe[targetZone].length - 1));
+    setSelectedMulliganCards((cards) => cards.filter((c) => c !== draggedCardKey));
+    setMessage(`Moved ${cardLabel(found.card)} to ${targetZone}.`);
+  }
+
   async function toggleExert(card, key) {
     const me = players[playerId];
     if (!me) return;
@@ -980,16 +1011,19 @@ if (selectedTypeFilters.length > 0) {
 
                 <Zone
                   title="Your Hand"
+                  zoneName="hand"
                   cards={me.hand}
                   selectedCardKey={selectedCardKey}
                   setSelectedCard={setSelectedCard}
                   setSelectedCardKey={setSelectedCardKey}
                   selectedMulliganCards={selectedMulliganCards}
                   onCardClick={toggleMulliganCard}
+                  onDropCard={moveCardByKey}
                 />
 
                 <Zone
                   title="Your Board"
+                  zoneName="board"
                   cards={me.board}
                   selectedCardKey={selectedCardKey}
                   setSelectedCard={setSelectedCard}
@@ -997,24 +1031,29 @@ if (selectedTypeFilters.length > 0) {
                   exertedCards={me.exerted || []}
                   damage={me.damage || {}}
                   onDoubleClickCard={toggleExert}
+                  onDropCard={moveCardByKey}
                 />
 
                 <Zone
                   title="Your Inkwell"
+                  zoneName="inkwell"
                   cards={me.inkwell}
                   selectedCardKey={selectedCardKey}
                   setSelectedCard={setSelectedCard}
                   setSelectedCardKey={setSelectedCardKey}
                   exertedCards={me.exerted || []}
                   onDoubleClickCard={toggleExert}
+                  onDropCard={moveCardByKey}
                 />
 
                 <Zone
                   title="Your Discard"
+                  zoneName="discard"
                   cards={me.discard}
                   selectedCardKey={selectedCardKey}
                   setSelectedCard={setSelectedCard}
                   setSelectedCardKey={setSelectedCardKey}
+                  onDropCard={moveCardByKey}
                 />
               </div>
 
@@ -1436,6 +1475,7 @@ function MiniCards({ cards, exertedCards = [], damage = {} }) {
 
 function Zone({
   title,
+  zoneName,
   cards,
   selectedCardKey,
   setSelectedCard,
@@ -1444,12 +1484,27 @@ function Zone({
   onCardClick,
   exertedCards = [],
   damage = {},
-  onDoubleClickCard
+  onDoubleClickCard,
+  onDropCard
 }) {
   return (
-    <div style={zoneStyle}>
+    <div
+      style={zoneStyle}
+      onDragOver={(event) => {
+        if (onDropCard) {
+          event.preventDefault();
+        }
+      }}
+      onDrop={(event) => {
+        if (!onDropCard || !zoneName) return;
+        event.preventDefault();
+        const draggedCardKey = event.dataTransfer.getData("text/plain");
+        onDropCard(draggedCardKey, zoneName);
+      }}
+    >
       <h2>{title}</h2>
       <p>{cards.length} card(s)</p>
+      <p style={helperTextStyle}>Drag cards here to move them to this zone.</p>
 
       <div style={cardRowStyle}>
         {cards.map((card, index) => {
@@ -1460,6 +1515,11 @@ function Zone({
           return (
             <button
               key={key}
+              draggable
+              onDragStart={(event) => {
+                event.dataTransfer.setData("text/plain", key);
+                event.dataTransfer.effectAllowed = "move";
+              }}
               onClick={() => {
                 if (onCardClick) {
                   onCardClick(card, key);

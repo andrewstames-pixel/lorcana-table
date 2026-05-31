@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
 
@@ -223,6 +223,7 @@ function App() {
   const [players, setPlayers] = useState({});
   const [selectedCardKey, setSelectedCardKey] = useState(null);
   const [selectedCard, setSelectedCard] = useState(null);
+  const [selectedMultiCardKeys, setSelectedMultiCardKeys] = useState([]);
   const [selectedMulliganCards, setSelectedMulliganCards] = useState([]);
   const [message, setMessage] = useState("");
   const [currentTurnPlayerId, setCurrentTurnPlayerId] = useState(null);
@@ -606,6 +607,7 @@ if (selectedTypeFilters.length > 0) {
     setPlayers({});
     setSelectedCard(null);
     setSelectedCardKey(null);
+    setSelectedMultiCardKeys([]);
     setSelectedMulliganCards([]);
     setJoinCode("");
     setCurrentTurnPlayerId(null);
@@ -820,6 +822,102 @@ if (selectedTypeFilters.length > 0) {
     setMessage(`Boosted ${cardLabel(selectedBoardCard)} from the top of your deck.`);
   }
 
+  function parseDraggedCardKeys(draggedCardKey) {
+    if (!draggedCardKey) return [];
+
+    try {
+      const parsed = JSON.parse(draggedCardKey);
+      if (parsed?.type === "multi" && Array.isArray(parsed.keys)) {
+        return [...new Set(parsed.keys)].filter(Boolean);
+      }
+    } catch {
+      // Not a multi-card payload. Treat as a normal single card key.
+    }
+
+    return [draggedCardKey];
+  }
+
+  async function moveMultipleCardsByKeys(draggedCardKeys, targetZone) {
+    const me = players[playerId];
+    if (!me || !Array.isArray(draggedCardKeys) || draggedCardKeys.length === 0) return;
+
+    const uniqueKeys = [...new Set(draggedCardKeys)].filter(Boolean);
+    const selectedSet = new Set(uniqueKeys);
+    const foundCards = uniqueKeys
+      .map((key) => ({ key, found: findCardInZones(me, key) }))
+      .filter((entry) => entry.found);
+
+    if (foundCards.length === 0) return;
+
+    const boostCardsToHold = [];
+    const nextTags = { ...(me.tags || {}) };
+    const nextTokens = { ...(me.tokens || {}) };
+    const nextAttachments = { ...(me.attachments || {}) };
+    const nextBoosts = { ...(me.boosts || {}) };
+    const nextDamage = { ...(me.damage || {}) };
+
+    if (targetZone !== "board") {
+      for (const { key, found } of foundCards) {
+        delete nextDamage[key];
+        delete nextTokens[key];
+        delete nextAttachments[key];
+
+        if (found.zone === "board" && (me.boosts || {})[key]?.length > 0) {
+          boostCardsToHold.push(...((me.boosts || {})[key] || []));
+        }
+
+        delete nextBoosts[key];
+      }
+
+      Object.keys(nextAttachments).forEach((childKey) => {
+        if (selectedSet.has(nextAttachments[childKey])) {
+          delete nextAttachments[childKey];
+        }
+      });
+    }
+
+    const movedCards = foundCards.map(({ found }) => found.card);
+
+    const nextMe = {
+      ...me,
+      hand: me.hand.filter((card, index) => !selectedSet.has(cardKey(card, index))),
+      board: me.board.filter((card, index) => !selectedSet.has(cardKey(card, index))),
+      inkwell: me.inkwell.filter((card, index) => !selectedSet.has(cardKey(card, index))),
+      discard: me.discard.filter((card, index) => !selectedSet.has(cardKey(card, index))),
+      boostHolding: (me.boostHolding || []).filter((card, index) => !selectedSet.has(cardKey(card, index))),
+      exerted: (me.exerted || []).filter((key) => !selectedSet.has(key)),
+      damage: nextDamage,
+      tags: nextTags,
+      tokens: nextTokens,
+      attachments: nextAttachments,
+      boosts: nextBoosts
+    };
+
+    nextMe[targetZone] = [...(nextMe[targetZone] || []), ...movedCards];
+
+    if (boostCardsToHold.length > 0) {
+      nextMe.boostHolding = [
+        ...(nextMe.boostHolding || []),
+        ...boostCardsToHold
+      ];
+    }
+
+    await updateMe(nextMe);
+
+    const lastMovedCard = movedCards[movedCards.length - 1];
+    const lastIndex = nextMe[targetZone].length - 1;
+    setSelectedCard(lastMovedCard || null);
+    setSelectedCardKey(lastMovedCard ? cardKey(lastMovedCard, lastIndex) : null);
+    setSelectedMultiCardKeys([]);
+    setSelectedMulliganCards((cards) => cards.filter((key) => !selectedSet.has(key)));
+
+    if (boostCardsToHold.length > 0) {
+      setMessage(`Moved ${movedCards.length} card(s) to ${targetZone}. Moved ${boostCardsToHold.length} boosted card(s) to Boost Holding.`);
+    } else {
+      setMessage(`Moved ${movedCards.length} card(s) to ${targetZone}.`);
+    }
+  }
+
   async function moveSelectedCard(targetZone) {
     if (!selectedCardKey) {
       setMessage("Click one of your cards first.");
@@ -881,6 +979,15 @@ if (selectedTypeFilters.length > 0) {
 
 
   async function moveCardByKey(draggedCardKey, targetZone) {
+    const draggedKeys = parseDraggedCardKeys(draggedCardKey);
+
+    if (draggedKeys.length > 1) {
+      await moveMultipleCardsByKeys(draggedKeys, targetZone);
+      return;
+    }
+
+    draggedCardKey = draggedKeys[0];
+
     const me = players[playerId];
     if (!me || !draggedCardKey) return;
 
@@ -931,6 +1038,7 @@ if (selectedTypeFilters.length > 0) {
     await updateMe(nextMe);
     setSelectedCard(found.card);
     setSelectedCardKey(cardKey(found.card, nextMe[targetZone].length - 1));
+    setSelectedMultiCardKeys((keys) => keys.filter((key) => key !== draggedCardKey));
     setSelectedMulliganCards((cards) => cards.filter((c) => c !== draggedCardKey));
 
     if (boostCardsToHold.length === 0) {
@@ -1050,6 +1158,7 @@ if (selectedTypeFilters.length > 0) {
 
     setSelectedCard(null);
     setSelectedCardKey(null);
+    setSelectedMultiCardKeys([]);
     setSelectedMulliganCards([]);
   }
 
@@ -1080,7 +1189,51 @@ if (selectedTypeFilters.length > 0) {
 
     setSelectedCard(null);
     setSelectedCardKey(null);
+    setSelectedMultiCardKeys([]);
     setSelectedMulliganCards([]);
+  }
+
+  function playKnockSound() {
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+
+      const audioContext = new AudioContext();
+      const masterGain = audioContext.createGain();
+      masterGain.gain.value = 0.18;
+      masterGain.connect(audioContext.destination);
+
+      const playKnock = (startTime) => {
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(120, startTime);
+        oscillator.frequency.exponentialRampToValueAtTime(55, startTime + 0.08);
+
+        gain.gain.setValueAtTime(0.001, startTime);
+        gain.gain.exponentialRampToValueAtTime(1, startTime + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.14);
+
+        oscillator.connect(gain);
+        gain.connect(masterGain);
+        oscillator.start(startTime);
+        oscillator.stop(startTime + 0.16);
+      };
+
+      const now = audioContext.currentTime;
+      playKnock(now);
+      playKnock(now + 0.18);
+
+      setTimeout(() => audioContext.close(), 700);
+    } catch {
+      // Sound is optional; gameplay still works if the browser blocks audio.
+    }
+  }
+
+  async function finishTurn() {
+    playKnockSound();
+    await nextTurn();
   }
 
   async function nextTurn() {
@@ -1295,6 +1448,36 @@ if (selectedTypeFilters.length > 0) {
                       </div>
                       <div style={{ fontSize: "10px" }}>Draw</div>
                     </button>
+
+                    <div style={deckActionStackStyle}>
+                      <button onClick={() => changeLore(1)} style={deckActionButtonStyle}>
+                        Lore+
+                      </button>
+                      <button onClick={() => changeLore(-1)} style={deckActionButtonStyle}>
+                        Lore-
+                      </button>
+                      <button onClick={() => changeDamage(1)} style={deckActionButtonStyle}>
+                        Damage+
+                      </button>
+                      <button onClick={() => changeDamage(-1)} style={deckActionButtonStyle}>
+                        Damage-
+                      </button>
+                      <button onClick={finishTurn} style={yellowDoneButtonStyle}>
+                        I'm Done
+                      </button>
+                      <button onClick={shuffleDeck} style={deckActionButtonStyle}>
+                        Shuffle Deck
+                      </button>
+                      <button onClick={mulliganSelected} style={deckActionButtonStyle}>
+                        Mulligan Selected
+                      </button>
+                      <button onClick={rollForFirstPlayer} style={deckActionButtonStyle}>
+                        Roll For First Player
+                      </button>
+                      <button onClick={leaveRoom} style={deckActionButtonStyle}>
+                        Leave Room
+                      </button>
+                    </div>
                   </div>
 
                   <Zone
@@ -1302,6 +1485,8 @@ if (selectedTypeFilters.length > 0) {
                     zoneName="hand"
                     cards={me.hand}
                     selectedCardKey={selectedCardKey}
+                    selectedMultiCardKeys={selectedMultiCardKeys}
+                    setSelectedMultiCardKeys={setSelectedMultiCardKeys}
                     setSelectedCard={setSelectedCard}
                     setSelectedCardKey={setSelectedCardKey}
                     selectedMulliganCards={selectedMulliganCards}
@@ -1316,6 +1501,8 @@ if (selectedTypeFilters.length > 0) {
                     zoneName="board"
                     cards={me.board}
                     selectedCardKey={selectedCardKey}
+                    selectedMultiCardKeys={selectedMultiCardKeys}
+                    setSelectedMultiCardKeys={setSelectedMultiCardKeys}
                     setSelectedCard={setSelectedCard}
                     setSelectedCardKey={setSelectedCardKey}
                     exertedCards={me.exerted || []}
@@ -1333,6 +1520,8 @@ if (selectedTypeFilters.length > 0) {
                     zoneName="inkwell"
                     cards={me.inkwell}
                     selectedCardKey={selectedCardKey}
+                    selectedMultiCardKeys={selectedMultiCardKeys}
+                    setSelectedMultiCardKeys={setSelectedMultiCardKeys}
                     setSelectedCard={setSelectedCard}
                     setSelectedCardKey={setSelectedCardKey}
                     exertedCards={me.exerted || []}
@@ -1373,6 +1562,8 @@ if (selectedTypeFilters.length > 0) {
                     zoneName="discard"
                     cards={me.discard}
                     selectedCardKey={selectedCardKey}
+                    selectedMultiCardKeys={selectedMultiCardKeys}
+                    setSelectedMultiCardKeys={setSelectedMultiCardKeys}
                     setSelectedCard={setSelectedCard}
                     setSelectedCardKey={setSelectedCardKey}
                     onDropCard={moveCardByKey}
@@ -1384,6 +1575,8 @@ if (selectedTypeFilters.length > 0) {
                       zoneName="boostHolding"
                       cards={me.boostHolding || []}
                       selectedCardKey={selectedCardKey}
+                      selectedMultiCardKeys={selectedMultiCardKeys}
+                      setSelectedMultiCardKeys={setSelectedMultiCardKeys}
                       setSelectedCard={setSelectedCard}
                       setSelectedCardKey={setSelectedCardKey}
                       onDropCard={moveCardByKey}
@@ -1397,73 +1590,17 @@ if (selectedTypeFilters.length > 0) {
                 <strong style={{ color: "#38bdf8" }}>
                   {selectedMulliganCards.length}
                 </strong>
+                {selectedMultiCardKeys.length > 0 && (
+                  <>
+                    {" | "}
+                    Multi-selected:{" "}
+                    <strong style={{ color: "#22c55e" }}>
+                      {selectedMultiCardKeys.length}
+                    </strong>
+                  </>
+                )}
               </p>
 
-              <div style={actionButtonBarStyle}>
-                <button onClick={rollForFirstPlayer} style={buttonStyle}>
-                  Roll for First Player
-                </button>
-
-                <button onClick={() => moveSelectedCard("board")} style={buttonStyle}>
-                  Move to Board
-                </button>
-
-                <button onClick={() => moveSelectedCard("inkwell")} style={buttonStyle}>
-                  Move to Inkwell
-                </button>
-
-                <button onClick={() => moveSelectedCard("discard")} style={buttonStyle}>
-                  Move to Discard
-                </button>
-
-                <button onClick={() => moveSelectedCard("hand")} style={buttonStyle}>
-                  Return to Hand
-                </button>
-
-                <button onClick={() => changeLore(-1)} style={buttonStyle}>
-                  - Lore
-                </button>
-
-                <button onClick={() => changeLore(1)} style={buttonStyle}>
-                  + Lore
-                </button>
-
-                <button onClick={readyAllCards} style={buttonStyle}>
-                  Ready All
-                </button>
-
-                <button onClick={nextTurn} style={buttonStyle}>
-                  Next Turn
-                </button>
-
-                <button onClick={() => changeDamage(1)} style={buttonStyle}>
-                  + Damage
-                </button>
-
-                <button onClick={() => changeDamage(-1)} style={buttonStyle}>
-                  - Damage
-                </button>
-
-                <button onClick={clearDamage} style={buttonStyle}>
-                  Clear Damage
-                </button>
-
-                <button onClick={drawCard} style={buttonStyle}>
-                  Draw Card
-                </button>
-
-                <button onClick={shuffleDeck} style={buttonStyle}>
-                  Shuffle Deck
-                </button>
-
-                <button onClick={mulliganHand} style={buttonStyle}>
-                  Mulligan Hand
-                </button>
-
-                <button onClick={mulliganSelected} style={buttonStyle}>
-                  Mulligan Selected
-                </button>
-              </div>
             </>
           )}
 
@@ -1474,10 +1611,6 @@ if (selectedTypeFilters.length > 0) {
           )}
 
           {message && <p>{message}</p>}
-
-          <button onClick={leaveRoom} style={buttonStyle}>
-            Leave Room
-          </button>
         </div>
       </div>
     );
@@ -2157,6 +2290,8 @@ function Zone({
   zoneName,
   cards,
   selectedCardKey,
+  selectedMultiCardKeys = [],
+  setSelectedMultiCardKeys,
   setSelectedCard,
   setSelectedCardKey,
   selectedMulliganCards = [],
@@ -2172,6 +2307,7 @@ function Zone({
 }) {
   const isInkwellZone = zoneName === "inkwell";
   const isHandZone = zoneName === "hand";
+  const clickTimerRef = useRef(null);
 
   function handleZoneDragOver(event) {
     if (!onDropCard || !zoneName) return;
@@ -2204,8 +2340,8 @@ function Zone({
       <p>{cards.length} card(s)</p>
       <p style={helperTextStyle}>
         {isInkwellZone
-          ? "Face down. Click to reveal. Double-click to exert/unexert."
-          : "Drag cards here to move them to this zone."}
+          ? "Face down. Click once to exert/ready. Double-click to reveal. Shift-click to multi-select."
+          : "Drag cards here to move them to this zone. Shift-click to multi-select."}
       </p>
 
       <div
@@ -2216,6 +2352,7 @@ function Zone({
       >
         {cards.map((card, index) => {
           const key = cardKey(card, index);
+          const isMultiSelected = selectedMultiCardKeys.includes(key);
           const isMulliganSelected = selectedMulliganCards.includes(key);
           const cardDamage = damage[key] || 0;
           const cardTags = tags[key] || [];
@@ -2234,11 +2371,49 @@ function Zone({
               key={key}
               draggable
               onDragStart={(event) => {
-                event.dataTransfer.setData("text/plain", key);
+                const draggedKeys = selectedMultiCardKeys.includes(key) && selectedMultiCardKeys.length > 1
+                  ? selectedMultiCardKeys
+                  : [key];
+
+                event.dataTransfer.setData(
+                  "text/plain",
+                  draggedKeys.length > 1
+                    ? JSON.stringify({ type: "multi", keys: draggedKeys })
+                    : key
+                );
                 event.dataTransfer.effectAllowed = "move";
               }}
               onClick={(event) => {
                 if (event.detail > 1) return;
+
+                if (event.shiftKey) {
+                  event.preventDefault();
+                  event.stopPropagation();
+
+                  setSelectedCard(card);
+                  setSelectedCardKey(key);
+                  setSelectedMultiCardKeys?.((current) =>
+                    current.includes(key)
+                      ? current.filter((existingKey) => existingKey !== key)
+                      : [...current, key]
+                  );
+                  return;
+                }
+
+                if (isInkwellZone) {
+                  if (clickTimerRef.current) {
+                    clearTimeout(clickTimerRef.current);
+                  }
+
+                  clickTimerRef.current = setTimeout(() => {
+                    onDoubleClickCard?.(card, key);
+                    clickTimerRef.current = null;
+                  }, 220);
+
+                  return;
+                }
+
+                setSelectedMultiCardKeys?.([]);
 
                 if (onCardClick) {
                   onCardClick(card, key);
@@ -2250,9 +2425,19 @@ function Zone({
               onDoubleClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
+
+                if (clickTimerRef.current) {
+                  clearTimeout(clickTimerRef.current);
+                  clickTimerRef.current = null;
+                }
+
                 setSelectedCard(card);
                 setSelectedCardKey(key);
-                onDoubleClickCard?.(card, key);
+                setSelectedMultiCardKeys?.([]);
+
+                if (!isInkwellZone) {
+                  onDoubleClickCard?.(card, key);
+                }
               }}
               onDragEnter={handleZoneDragOver}
               onDragOver={handleZoneDragOver}
@@ -2260,11 +2445,13 @@ function Zone({
               style={{
                 ...(isInkwellZone ? inkwellCardStyle : isHandZone ? handCardStyle : cardStyle),
                 ...(isInkwellZone && index > 0 ? { marginTop: "-54px" } : {}),
-                border: isMulliganSelected
-                  ? "3px solid #38bdf8"
-                  : selectedCardKey === key
-                    ? "3px solid #facc15"
-                    : "1px solid #374151",
+                border: isMultiSelected
+                  ? "4px dashed #22c55e"
+                  : isMulliganSelected
+                    ? "3px solid #38bdf8"
+                    : selectedCardKey === key
+                      ? "3px solid #facc15"
+                      : "1px solid #374151",
                 transform: isRotatedCard ? "rotate(90deg)" : "none"
               }}
             >
@@ -2434,7 +2621,7 @@ const gameAreaStyle = {
 
 const topPlayRowStyle = {
   display: "grid",
-  gridTemplateColumns: "96px minmax(540px, 1.35fr) minmax(520px, 1.35fr) 136px",
+  gridTemplateColumns: "150px minmax(600px, 1.45fr) minmax(520px, 1.35fr) 136px",
   gap: "12px",
   alignItems: "stretch",
   width: "100%"
@@ -2459,7 +2646,7 @@ const smallDeckZoneStyle = {
   background: "#020617",
   display: "grid",
   alignContent: "start",
-  justifyItems: "center",
+  justifyItems: "stretch",
   gap: "8px",
   minWidth: 0
 };
@@ -2482,6 +2669,33 @@ const smallDeckPileStyle = {
   margin: "0 auto",
   boxShadow: "0 6px 14px rgba(0,0,0,0.35)",
   padding: "6px"
+};
+
+const deckActionStackStyle = {
+  display: "grid",
+  gap: "6px",
+  width: "100%",
+  marginTop: "4px"
+};
+
+const deckActionButtonStyle = {
+  padding: "7px 8px",
+  borderRadius: "8px",
+  border: "1px solid #374151",
+  background: "#1f2937",
+  color: "white",
+  cursor: "pointer",
+  fontWeight: "bold",
+  fontSize: "12px",
+  lineHeight: "1.15"
+};
+
+const yellowDoneButtonStyle = {
+  ...deckActionButtonStyle,
+  background: "#facc15",
+  color: "#111827",
+  border: "1px solid #fde68a",
+  boxShadow: "0 0 10px rgba(250,204,21,0.35)"
 };
 
 const handCardStyle = {

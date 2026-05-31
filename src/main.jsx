@@ -1285,81 +1285,111 @@ if (selectedTypeFilters.length > 0) {
           {me && (
             <>
               <div style={gameAreaStyle}>
-                <div style={deckZoneStyle}>
-                  <h2>Your Deck</h2>
-                  <button onClick={drawCard} style={deckPileStyle}>
-                    <div style={{ fontSize: "18px", fontWeight: "bold" }}>DECK</div>
-                    <div style={{ fontSize: "28px", fontWeight: "bold" }}>
-                      {me.deck?.length || 0}
-                    </div>
-                    <div style={{ fontSize: "12px" }}>Click to draw</div>
-                  </button>
+                <div style={topPlayRowStyle}>
+                  <div style={smallDeckZoneStyle}>
+                    <h2 style={compactZoneTitleStyle}>Deck</h2>
+                    <button onClick={drawCard} style={smallDeckPileStyle}>
+                      <div style={{ fontSize: "13px", fontWeight: "bold" }}>DECK</div>
+                      <div style={{ fontSize: "24px", fontWeight: "bold" }}>
+                        {me.deck?.length || 0}
+                      </div>
+                      <div style={{ fontSize: "10px" }}>Draw</div>
+                    </button>
+                  </div>
+
+                  <Zone
+                    title="Your Hand"
+                    zoneName="hand"
+                    cards={me.hand}
+                    selectedCardKey={selectedCardKey}
+                    setSelectedCard={setSelectedCard}
+                    setSelectedCardKey={setSelectedCardKey}
+                    selectedMulliganCards={selectedMulliganCards}
+                    onCardClick={toggleMulliganCard}
+                    onDropCard={moveCardByKey}
+                    tags={me.tags || {}}
+                    tokens={me.tokens || {}}
+                  />
+
+                  <Zone
+                    title="Your Board"
+                    zoneName="board"
+                    cards={me.board}
+                    selectedCardKey={selectedCardKey}
+                    setSelectedCard={setSelectedCard}
+                    setSelectedCardKey={setSelectedCardKey}
+                    exertedCards={me.exerted || []}
+                    damage={me.damage || {}}
+                    tags={me.tags || {}}
+                    tokens={me.tokens || {}}
+                    attachments={me.attachments || {}}
+                    boosts={me.boosts || {}}
+                    onDoubleClickCard={toggleExert}
+                    onDropCard={moveCardByKey}
+                  />
+
+                  <Zone
+                    title="Your Inkwell"
+                    zoneName="inkwell"
+                    cards={me.inkwell}
+                    selectedCardKey={selectedCardKey}
+                    setSelectedCard={setSelectedCard}
+                    setSelectedCardKey={setSelectedCardKey}
+                    exertedCards={me.exerted || []}
+                    onDoubleClickCard={toggleExert}
+                    onDropCard={moveCardByKey}
+                  />
                 </div>
 
-                <Zone
-                  title="Your Hand"
-                  zoneName="hand"
-                  cards={me.hand}
-                  selectedCardKey={selectedCardKey}
-                  setSelectedCard={setSelectedCard}
-                  setSelectedCardKey={setSelectedCardKey}
-                  selectedMulliganCards={selectedMulliganCards}
-                  onCardClick={toggleMulliganCard}
-                  onDropCard={moveCardByKey}
-                  tags={me.tags || {}}
-                  tokens={me.tokens || {}}
-                />
+                <div style={bottomPlayRowStyle}>
+                  <div style={toolsPanelSlotStyle}>
+                    {selectedCardKey && (me.board.some((card, index) => cardKey(card, index) === selectedCardKey) || me.hand.some((card, index) => cardKey(card, index) === selectedCardKey)) ? (
+                      <BoardCardTools
+                        selectedCardKey={selectedCardKey}
+                        selectedCard={selectedCard}
+                        boardCards={me.board}
+                        tags={me.tags || {}}
+                        tokens={me.tokens || {}}
+                        attachments={me.attachments || {}}
+                        onToggleTag={toggleCardTag}
+                        onAddToken={addCardToken}
+                        onRemoveToken={removeCardToken}
+                        onAssignTo={assignSelectedCardTo}
+                        onClearAssignment={clearSelectedAssignment}
+                        onBoostFromDeck={boostSelectedFromDeck}
+                      />
+                    ) : (
+                      <div style={boardToolsStyle}>
+                        <h3>Board Tools</h3>
+                        <p style={helperTextStyle}>
+                          Select a card in your hand or on your board to tag it, add tokens, assign cards, or boost.
+                        </p>
+                      </div>
+                    )}
+                  </div>
 
-                <Zone
-                  title="Your Board"
-                  zoneName="board"
-                  cards={me.board}
-                  selectedCardKey={selectedCardKey}
-                  setSelectedCard={setSelectedCard}
-                  setSelectedCardKey={setSelectedCardKey}
-                  exertedCards={me.exerted || []}
-                  damage={me.damage || {}}
-                  tags={me.tags || {}}
-                  tokens={me.tokens || {}}
-                  attachments={me.attachments || {}}
-                  boosts={me.boosts || {}}
-                  onDoubleClickCard={toggleExert}
-                  onDropCard={moveCardByKey}
-                />
-
-                <Zone
-                  title="Your Inkwell"
-                  zoneName="inkwell"
-                  cards={me.inkwell}
-                  selectedCardKey={selectedCardKey}
-                  setSelectedCard={setSelectedCard}
-                  setSelectedCardKey={setSelectedCardKey}
-                  exertedCards={me.exerted || []}
-                  onDoubleClickCard={toggleExert}
-                  onDropCard={moveCardByKey}
-                />
-
-                <Zone
-                  title="Your Discard"
-                  zoneName="discard"
-                  cards={me.discard}
-                  selectedCardKey={selectedCardKey}
-                  setSelectedCard={setSelectedCard}
-                  setSelectedCardKey={setSelectedCardKey}
-                  onDropCard={moveCardByKey}
-                />
-
-                {(me.boostHolding || []).length > 0 && (
                   <Zone
-                    title="Boost Holding"
-                    zoneName="boostHolding"
-                    cards={me.boostHolding || []}
+                    title="Your Discard"
+                    zoneName="discard"
+                    cards={me.discard}
                     selectedCardKey={selectedCardKey}
                     setSelectedCard={setSelectedCard}
                     setSelectedCardKey={setSelectedCardKey}
                     onDropCard={moveCardByKey}
                   />
-                )}
+
+                  {(me.boostHolding || []).length > 0 && (
+                    <Zone
+                      title="Boost Holding"
+                      zoneName="boostHolding"
+                      cards={me.boostHolding || []}
+                      selectedCardKey={selectedCardKey}
+                      setSelectedCard={setSelectedCard}
+                      setSelectedCardKey={setSelectedCardKey}
+                      onDropCard={moveCardByKey}
+                    />
+                  )}
+                </div>
               </div>
 
               <p>
@@ -1369,7 +1399,7 @@ if (selectedTypeFilters.length > 0) {
                 </strong>
               </p>
 
-              <div style={{ marginTop: "20px" }}>
+              <div style={actionButtonBarStyle}>
                 <button onClick={rollForFirstPlayer} style={buttonStyle}>
                   Roll for First Player
                 </button>
@@ -1441,23 +1471,6 @@ if (selectedTypeFilters.length > 0) {
             <p>
               Selected: <strong style={{ color: "#facc15" }}>{cardLabel(selectedCard)}</strong>
             </p>
-          )}
-
-          {me && selectedCardKey && (me.board.some((card, index) => cardKey(card, index) === selectedCardKey) || me.hand.some((card, index) => cardKey(card, index) === selectedCardKey)) && (
-            <BoardCardTools
-              selectedCardKey={selectedCardKey}
-              selectedCard={selectedCard}
-              boardCards={me.board}
-              tags={me.tags || {}}
-              tokens={me.tokens || {}}
-              attachments={me.attachments || {}}
-              onToggleTag={toggleCardTag}
-              onAddToken={addCardToken}
-              onRemoveToken={removeCardToken}
-              onAssignTo={assignSelectedCardTo}
-              onClearAssignment={clearSelectedAssignment}
-              onBoostFromDeck={boostSelectedFromDeck}
-            />
           )}
 
           {message && <p>{message}</p>}
@@ -2157,26 +2170,50 @@ function Zone({
   attachments = {},
   boosts = {}
 }) {
+  const isInkwellZone = zoneName === "inkwell";
+  const isHandZone = zoneName === "hand";
+
+  function handleZoneDragOver(event) {
+    if (!onDropCard || !zoneName) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  }
+
+  function handleZoneDrop(event) {
+    if (!onDropCard || !zoneName) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const draggedCardKey = event.dataTransfer.getData("text/plain");
+    if (!draggedCardKey) return;
+
+    onDropCard(draggedCardKey, zoneName);
+  }
+
   return (
     <div
-      style={zoneStyle}
-      onDragOver={(event) => {
-        if (onDropCard) {
-          event.preventDefault();
-        }
+      style={{
+        ...zoneStyle,
+        ...(isInkwellZone ? inkwellZoneStyle : {})
       }}
-      onDrop={(event) => {
-        if (!onDropCard || !zoneName) return;
-        event.preventDefault();
-        const draggedCardKey = event.dataTransfer.getData("text/plain");
-        onDropCard(draggedCardKey, zoneName);
-      }}
+      onDragEnter={handleZoneDragOver}
+      onDragOver={handleZoneDragOver}
+      onDrop={handleZoneDrop}
     >
       <h2>{title}</h2>
       <p>{cards.length} card(s)</p>
-      <p style={helperTextStyle}>Drag cards here to move them to this zone.</p>
+      <p style={helperTextStyle}>
+        {isInkwellZone
+          ? "Face down. Click to reveal. Double-click to exert/unexert."
+          : "Drag cards here to move them to this zone."}
+      </p>
 
-      <div style={cardRowStyle}>
+      <div
+        style={isInkwellZone ? inkwellCardColumnStyle : cardRowStyle}
+        onDragEnter={handleZoneDragOver}
+        onDragOver={handleZoneDragOver}
+        onDrop={handleZoneDrop}
+      >
         {cards.map((card, index) => {
           const key = cardKey(card, index);
           const isMulliganSelected = selectedMulliganCards.includes(key);
@@ -2185,7 +2222,10 @@ function Zone({
           const cardTokens = tokens[key] || [];
           const boostCount = (boosts[key] || []).length;
           const isLocationCard = cardTags.includes("Location");
-          const isRotatedCard = exertedCards.includes(key) || isLocationCard;
+          const isExertedCard = exertedCards.includes(key);
+          const isRotatedCard = isInkwellZone
+            ? !isExertedCard
+            : isExertedCard || isLocationCard;
           const parentCard = cards.find((possibleParent, parentIndex) => cardKey(possibleParent, parentIndex) === attachments[key]);
           const attachedChildren = cards.filter((possibleChild, childIndex) => attachments[cardKey(possibleChild, childIndex)] === key);
 
@@ -2197,7 +2237,9 @@ function Zone({
                 event.dataTransfer.setData("text/plain", key);
                 event.dataTransfer.effectAllowed = "move";
               }}
-              onClick={() => {
+              onClick={(event) => {
+                if (event.detail > 1) return;
+
                 if (onCardClick) {
                   onCardClick(card, key);
                 } else {
@@ -2205,9 +2247,19 @@ function Zone({
                   setSelectedCardKey(key);
                 }
               }}
-              onDoubleClick={() => onDoubleClickCard?.(card, key)}
+              onDoubleClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setSelectedCard(card);
+                setSelectedCardKey(key);
+                onDoubleClickCard?.(card, key);
+              }}
+              onDragEnter={handleZoneDragOver}
+              onDragOver={handleZoneDragOver}
+              onDrop={handleZoneDrop}
               style={{
-                ...cardStyle,
+                ...(isInkwellZone ? inkwellCardStyle : isHandZone ? handCardStyle : cardStyle),
+                ...(isInkwellZone && index > 0 ? { marginTop: "-54px" } : {}),
                 border: isMulliganSelected
                   ? "3px solid #38bdf8"
                   : selectedCardKey === key
@@ -2228,7 +2280,7 @@ function Zone({
                     ? `+ ${attachedChildren.map((child) => cardLabel(child)).join(", ")}`
                     : ""
                 }
-                isRotated={exertedCards.includes(key) || isLocationCard}
+                isRotated={isRotatedCard && !isLocationCard}
                 isLocation={isLocationCard}
               />
 
@@ -2273,10 +2325,10 @@ const pageStyle = {
   minHeight: "100vh",
   background: "#0f172a",
   color: "white",
-  display: "grid",
-  placeItems: "center",
+  display: "block",
   fontFamily: "Arial, sans-serif",
-  padding: "20px"
+  padding: "8px",
+  boxSizing: "border-box"
 };
 
 const panelStyle = {
@@ -2289,12 +2341,14 @@ const panelStyle = {
 };
 
 const roomPanelStyle = {
-  width: "min(95vw, 1200px)",
-  border: "1px solid #374151",
-  borderRadius: "16px",
-  padding: "24px",
+  width: "100%",
+  maxWidth: "none",
+  border: "none",
+  borderRadius: "0",
+  padding: "10px",
   background: "#111827",
-  textAlign: "center"
+  textAlign: "center",
+  boxSizing: "border-box"
 };
 
 const rollPanelStyle = {
@@ -2317,10 +2371,11 @@ const rollResultStyle = {
 
 const roomMainLayoutStyle = {
   display: "grid",
-  gridTemplateColumns: "180px 1fr",
-  gap: "16px",
+  gridTemplateColumns: "170px 1fr",
+  gap: "10px",
   alignItems: "start",
-  marginTop: "20px"
+  marginTop: "12px",
+  width: "100%"
 };
 
 const playerSidebarStyle = {
@@ -2357,30 +2412,140 @@ const playerLoreBadgeStyle = {
 
 const playersGridStyle = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-  gap: "12px"
+  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+  gap: "10px"
 };
 
 const seatStyle = {
-  border: "3px solid #374151",
-  borderRadius: "12px",
-  padding: "15px",
-  background: "#1f2937"
+  border: "2px solid #374151",
+  borderRadius: "10px",
+  padding: "10px",
+  background: "#1f2937",
+  minWidth: 0
 };
 
 const gameAreaStyle = {
-  marginTop: "30px",
+  marginTop: "14px",
   display: "grid",
-  gridTemplateColumns: "repeat(2, 1fr)",
-  gap: "20px"
+  gap: "12px",
+  width: "100%"
+};
+
+
+const topPlayRowStyle = {
+  display: "grid",
+  gridTemplateColumns: "96px minmax(540px, 1.35fr) minmax(520px, 1.35fr) 136px",
+  gap: "12px",
+  alignItems: "stretch",
+  width: "100%"
+};
+
+const bottomPlayRowStyle = {
+  display: "grid",
+  gridTemplateColumns: "minmax(360px, 0.9fr) minmax(520px, 1.25fr) minmax(280px, 0.75fr)",
+  gap: "12px",
+  alignItems: "start",
+  width: "100%"
+};
+
+const toolsPanelSlotStyle = {
+  minWidth: 0
+};
+
+const smallDeckZoneStyle = {
+  border: "1px solid #374151",
+  borderRadius: "12px",
+  padding: "8px",
+  background: "#020617",
+  display: "grid",
+  alignContent: "start",
+  justifyItems: "center",
+  gap: "8px",
+  minWidth: 0
+};
+
+const compactZoneTitleStyle = {
+  margin: "0",
+  fontSize: "15px"
+};
+
+const smallDeckPileStyle = {
+  width: "72px",
+  minHeight: "106px",
+  borderRadius: "10px",
+  background: "#111827",
+  color: "white",
+  border: "2px solid #facc15",
+  cursor: "pointer",
+  display: "grid",
+  placeItems: "center",
+  margin: "0 auto",
+  boxShadow: "0 6px 14px rgba(0,0,0,0.35)",
+  padding: "6px"
+};
+
+const handCardStyle = {
+  width: "145px",
+  minHeight: "200px",
+  borderRadius: "12px",
+  background: "#1f2937",
+  color: "white",
+  cursor: "grab",
+  padding: "6px",
+  position: "relative",
+  overflow: "visible",
+  userSelect: "none",
+  touchAction: "none"
+};
+
+const inkwellZoneStyle = {
+  minWidth: "120px",
+  maxWidth: "136px",
+  padding: "8px",
+  overflow: "visible"
+};
+
+const inkwellCardColumnStyle = {
+  display: "flex",
+  flexDirection: "column",
+  flexWrap: "nowrap",
+  gap: "0px",
+  alignItems: "center",
+  justifyContent: "flex-start",
+  minHeight: "520px",
+  paddingTop: "10px",
+  paddingBottom: "16px"
+};
+
+const inkwellCardStyle = {
+  width: "70px",
+  minHeight: "98px",
+  borderRadius: "10px",
+  background: "#1f2937",
+  color: "white",
+  cursor: "grab",
+  padding: "4px",
+  position: "relative",
+  overflow: "visible",
+  userSelect: "none",
+  touchAction: "none"
+};
+
+const actionButtonBarStyle = {
+  marginTop: "16px",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "8px",
+  justifyContent: "center"
 };
 
 const zoneStyle = {
   border: "1px solid #374151",
-  borderRadius: "16px",
-  padding: "12px",
+  borderRadius: "12px",
+  padding: "10px",
   background: "#020617",
-  minHeight: "120px"
+  minHeight: "120px",
+  minWidth: 0
 };
 
 const deckZoneStyle = {
@@ -2394,7 +2559,9 @@ const cardRowStyle = {
   display: "flex",
   flexWrap: "wrap",
   gap: "10px",
-  justifyContent: "center"
+  justifyContent: "center",
+  alignItems: "flex-start",
+  minHeight: "120px"
 };
 
 const cardStyle = {
@@ -2403,10 +2570,12 @@ const cardStyle = {
   borderRadius: "12px",
   background: "#1f2937",
   color: "white",
-  cursor: "pointer",
+  cursor: "grab",
   padding: "6px",
   position: "relative",
-  overflow: "visible"
+  overflow: "visible",
+  userSelect: "none",
+  touchAction: "none"
 };
 
 const cardImageStyle = {
@@ -2557,11 +2726,11 @@ const miniCardImageStyle = {
 const inkwellCardBackStyle = {
   width: "100%",
   height: "100%",
-  minHeight: "168px",
+  minHeight: "92px",
   borderRadius: "10px",
   background:
     "radial-gradient(circle at center, #4c1d95 0%, #312e81 38%, #111827 72%, #020617 100%)",
-  border: "3px solid #facc15",
+  border: "2px solid #facc15",
   display: "grid",
   placeItems: "center",
   color: "#facc15",
@@ -2571,8 +2740,8 @@ const inkwellCardBackStyle = {
 };
 
 const inkwellCardBackInnerStyle = {
-  width: "78%",
-  height: "78%",
+  width: "72%",
+  height: "72%",
   borderRadius: "999px",
   border: "2px solid rgba(250,204,21,0.75)",
   display: "grid",
@@ -2583,18 +2752,18 @@ const inkwellCardBackInnerStyle = {
 };
 
 const inkwellCardBackSparkleStyle = {
-  fontSize: "28px",
+  fontSize: "18px",
   lineHeight: "1"
 };
 
 const inkwellCardBackTitleStyle = {
   fontWeight: "bold",
-  fontSize: "15px",
+  fontSize: "10px",
   letterSpacing: "1px"
 };
 
 const inkwellCardBackSubtitleStyle = {
-  fontSize: "10px",
+  fontSize: "7px",
   letterSpacing: "2px",
   color: "#fde68a"
 };

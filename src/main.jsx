@@ -46,6 +46,7 @@ const CARD_TOKEN_OPTIONS = [
   "Can't Ready",
   "Ward",
   "Bodyguard",
+  "Evasive",
   "Custom"
 ];
 function cardLabel(card) {
@@ -67,6 +68,21 @@ function makeCardInstance(card) {
     ...card,
     instanceId: crypto.randomUUID()
   };
+}
+
+function shuffleArray(array) {
+  const shuffled = [...array];
+
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+
+    [shuffled[i], shuffled[j]] = [
+      shuffled[j],
+      shuffled[i]
+    ];
+  }
+
+  return shuffled;
 }
 
 function loadSavedDecks() {
@@ -166,9 +182,7 @@ function makePlayerId() {
 }
 
 function makePlayerState(username, color, deckCards) {
-  const deck = deckCards
-    .map(makeCardInstance)
-    .sort(() => Math.random() - 0.5);
+  const deck = shuffleArray(deckCards.map(makeCardInstance));
 
   const hand = deck.slice(0, 7);
   const remainingDeck = deck.slice(7);
@@ -1207,7 +1221,7 @@ if (selectedTypeFilters.length > 0) {
       // If a card already on the board is dropped onto the board background,
       // clear its assignment so it visibly leaves a location/character group.
       if (found.zone === "board") {
-        delete nextMe.attachments[selectedCardKey];
+        delete nextMe.attachments[draggedCardKey];
       }
     }
 
@@ -1323,11 +1337,9 @@ if (selectedTypeFilters.length > 0) {
     const me = players[playerId];
     if (!me || !me.deck) return;
 
-    const shuffledDeck = [...me.deck].sort(() => Math.random() - 0.5);
-
     await updateMe({
       ...me,
-      deck: shuffledDeck
+      deck: shuffleArray(me.deck)
     });
   }
 
@@ -1336,7 +1348,7 @@ if (selectedTypeFilters.length > 0) {
     if (!me || !me.deck) return;
 
     const newDeck = [...me.deck, ...me.hand];
-    const shuffledDeck = [...newDeck].sort(() => Math.random() - 0.5);
+    const shuffledDeck = shuffleArray(newDeck);
 
     await updateMe({
       ...me,
@@ -1369,7 +1381,7 @@ if (selectedTypeFilters.length > 0) {
 
     const keptHand = me.hand.filter((card, index) => !selectedSet.has(cardKey(card, index)));
     const deckWithReturnedCards = [...me.deck, ...selectedHandCards];
-    const shuffledDeck = [...deckWithReturnedCards].sort(() => Math.random() - 0.5);
+    const shuffledDeck = shuffleArray(deckWithReturnedCards);
 
     const replacementCount = selectedHandCards.length;
     const replacementCards = shuffledDeck.slice(0, replacementCount);
@@ -1485,7 +1497,7 @@ if (selectedTypeFilters.length > 0) {
     const returnedCards = me.hand.filter((card, index) => selectedSet.has(cardKey(card, index)));
 
     const deckWithReturnedCards = [...me.deck, ...returnedCards];
-    const shuffledDeck = [...deckWithReturnedCards].sort(() => Math.random() - 0.5);
+    const shuffledDeck = shuffleArray(deckWithReturnedCards);
 
     const replacementCount = returnedCards.length;
     const replacementCards = shuffledDeck.slice(0, replacementCount);
@@ -2449,10 +2461,10 @@ function CardContextMenu({
       ) : (
         <>
           <div style={contextMenuSectionStyle}>Actions</div>
+          <div style={contextMenuHintStyle}>Click repeatedly to add/remove multiple.</div>
           <button
             onClick={() => {
               onChangeDamage?.(1);
-              onClose();
             }}
             style={{ ...contextMenuButtonStyle, background: "#7f1d1d" }}
           >
@@ -2461,7 +2473,6 @@ function CardContextMenu({
           <button
             onClick={() => {
               onChangeDamage?.(-1);
-              onClose();
             }}
             style={{ ...contextMenuButtonStyle, background: "#374151" }}
           >
@@ -2470,7 +2481,6 @@ function CardContextMenu({
           <button
             onClick={() => {
               onBoostFromDeck?.();
-              onClose();
             }}
             style={{ ...contextMenuButtonStyle, background: "#facc15", color: "#111827" }}
           >
@@ -2479,7 +2489,6 @@ function CardContextMenu({
           <button
             onClick={() => {
               onUnboostToHolding?.();
-              onClose();
             }}
             style={{ ...contextMenuButtonStyle, background: "#581c87" }}
           >
@@ -2784,7 +2793,10 @@ function MiniCards({ cards, exertedCards = [], damage = {}, tags = {}, tokens = 
         {itemChildren.length > 0 && (
           <div style={miniAttachedItemsRowStyle}>
             {itemChildren.map((itemEntry, itemIndex) => (
-              <div key={`attached-item-${itemEntry.key}`} style={itemIndex > 0 ? { marginLeft: "-34px" } : {}}>
+              <div
+                key={`attached-item-${itemEntry.key}`}
+                style={itemIndex > 0 ? { marginLeft: "-44px" } : {}}
+              >
                 {renderMiniCard(itemEntry, true)}
               </div>
             ))}
@@ -2882,47 +2894,12 @@ function Zone({
   const cardEntries = cards.map((card, index) => ({
     card,
     key: cardKey(card, index),
-    index
+    index,
+    tags: tags[cardKey(card, index)] || [],
+    tokens: tokens[cardKey(card, index)] || []
   }));
 
-  const orderedCardEntries = (() => {
-    if (zoneName !== "board") return cardEntries;
-
-    const entryByKey = new Map(cardEntries.map((entry) => [entry.key, entry]));
-    const childrenByParent = new Map();
-
-    cardEntries.forEach((entry) => {
-      const parentKey = attachments?.[entry.key];
-      if (!parentKey || !entryByKey.has(parentKey)) return;
-
-      if (!childrenByParent.has(parentKey)) {
-        childrenByParent.set(parentKey, []);
-      }
-      childrenByParent.get(parentKey).push(entry);
-    });
-
-    const ordered = [];
-    const visited = new Set();
-
-    function addEntry(entry) {
-      if (!entry || visited.has(entry.key)) return;
-      visited.add(entry.key);
-      ordered.push(entry);
-
-      (childrenByParent.get(entry.key) || []).forEach(addEntry);
-    }
-
-    cardEntries
-      .filter((entry) => {
-        const parentKey = attachments?.[entry.key];
-        return !parentKey || !entryByKey.has(parentKey);
-      })
-      .forEach(addEntry);
-
-    cardEntries.forEach(addEntry);
-
-    return ordered;
-  })();
+  const entryByKey = new Map(cardEntries.map((entry) => [entry.key, entry]));
 
   function handleZoneDragOver(event) {
     if (!onDropCard || !zoneName) return;
@@ -2950,6 +2927,296 @@ function Zone({
     onDropCard(draggedCardKey, zoneName, getBoardDropInfo(event));
   }
 
+  function childrenFor(parentKey) {
+    return cardEntries.filter((entry) => attachments?.[entry.key] === parentKey);
+  }
+
+  function itemChildrenFor(parentKey) {
+    return childrenFor(parentKey).filter((entry) => (tags?.[entry.key] || []).includes("Item"));
+  }
+
+  function nonItemChildrenFor(parentKey) {
+    return childrenFor(parentKey).filter((entry) => !(tags?.[entry.key] || []).includes("Item"));
+  }
+
+  function isInsideLocation(entry) {
+    if (!attachments?.[entry.key]) return false;
+
+    let parentKey = attachments[entry.key];
+    const visited = new Set();
+
+    while (parentKey && !visited.has(parentKey)) {
+      visited.add(parentKey);
+      const parentEntry = entryByKey.get(parentKey);
+      if (!parentEntry) return false;
+      if ((tags?.[parentEntry.key] || []).includes("Location")) return true;
+      parentKey = attachments[parentKey];
+    }
+
+    return false;
+  }
+
+  function renderInteractiveCard(entry, options = {}) {
+    const { compact = false, shellStyle = {}, suppressAssignmentText = false } = options;
+    const { card, key, index } = entry;
+    const isMultiSelected = selectedMultiCardKeys.includes(key);
+    const isMulliganSelected = selectedMulliganCards.includes(key);
+    const cardDamage = damage[key] || 0;
+    const cardTags = tags[key] || [];
+    const cardTokens = tokens[key] || [];
+    const boostCount = (boosts[key] || []).length;
+    const isLocationCard = cardTags.includes("Location");
+    const isExertedCard = exertedCards.includes(key);
+    const isRotatedCard = isInkwellZone
+      ? isExertedCard
+      : isDiscardZone
+        ? isExertedCard
+        : isExertedCard || isLocationCard;
+    const parentCard = cards.find((possibleParent, parentIndex) => cardKey(possibleParent, parentIndex) === attachments[key]);
+    const attachedChildren = cards.filter((possibleChild, childIndex) => attachments[cardKey(possibleChild, childIndex)] === key);
+
+    return (
+      <button
+        key={key}
+        draggable
+        onDragStart={(event) => {
+          const draggedKeys = selectedMultiCardKeys.includes(key) && selectedMultiCardKeys.length > 1
+            ? selectedMultiCardKeys
+            : [key];
+
+          event.dataTransfer.setData(
+            "text/plain",
+            draggedKeys.length > 1
+              ? JSON.stringify({ type: "multi", keys: draggedKeys })
+              : key
+          );
+          event.dataTransfer.effectAllowed = "move";
+        }}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (event.detail > 1) return;
+
+          if (event.shiftKey) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            setSelectedCard(card);
+            setSelectedCardKey(key);
+            setSelectedMultiCardKeys?.((current) =>
+              current.includes(key)
+                ? current.filter((existingKey) => existingKey !== key)
+                : [...current, key]
+            );
+            return;
+          }
+
+          if (isInkwellZone) {
+            return;
+          }
+
+          setSelectedMultiCardKeys?.([]);
+
+          if (onCardClick) {
+            onCardClick(card, key);
+          } else {
+            setSelectedCard(card);
+            setSelectedCardKey(key);
+          }
+        }}
+        onDoubleClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          if (clickTimerRef.current) {
+            clearTimeout(clickTimerRef.current);
+            clickTimerRef.current = null;
+          }
+
+          if (isInkwellZone) {
+            const keysToToggle = selectedMultiCardKeys.includes(key) && selectedMultiCardKeys.length > 1
+              ? selectedMultiCardKeys
+              : [key];
+            onDoubleClickCard?.(card, keysToToggle);
+            return;
+          }
+
+          setSelectedCard(card);
+          setSelectedCardKey(key);
+          setSelectedMultiCardKeys?.([]);
+          onDoubleClickCard?.(card, key);
+        }}
+        onDragEnter={handleZoneDragOver}
+        onDragOver={handleZoneDragOver}
+        onDrop={(event) => {
+          if (!onDropCard || !zoneName) return;
+          event.preventDefault();
+          event.stopPropagation();
+
+          const draggedCardKey = event.dataTransfer.getData("text/plain");
+          if (!draggedCardKey) return;
+
+          if (zoneName === "board" && onCardDropOnCard && draggedCardKey !== key) {
+            onCardDropOnCard(draggedCardKey, key);
+            return;
+          }
+
+          onDropCard(draggedCardKey, zoneName, getBoardDropInfo(event));
+        }}
+        onContextMenu={(event) => {
+          onCardContextMenu?.(event, card, key, zoneName);
+        }}
+        style={{
+          ...(isInkwellZone ? inkwellCardStyle : isDiscardZone ? discardCardStyle : isHandZone ? handCardStyle : cardStyle),
+          ...(compact ? compactBoardCardStyle : {}),
+          ...(isInkwellZone && isRotatedCard ? inkwellExertedCardShellStyle : {}),
+          ...(isInkwellZone && index > 0 ? { marginLeft: "-38px" } : {}),
+          ...(isDiscardZone && index > 0 ? { marginLeft: "-48px" } : {}),
+          ...shellStyle,
+          border: isMultiSelected && !isInkwellZone
+            ? "4px dashed #22c55e"
+            : isInkwellZone
+              ? "1px solid transparent"
+              : isMulliganSelected
+                ? "3px solid #38bdf8"
+                : selectedCardKey === key
+                  ? "3px solid #facc15"
+                  : "1px solid #374151",
+          transform: isInkwellZone ? "none" : isRotatedCard ? "rotate(90deg)" : "none"
+        }}
+      >
+        <CardVisual
+          card={card}
+          faceDown={(zoneName === "inkwell" || zoneName === "boostHolding") && !revealedHiddenCardKeys.includes(key)}
+          damageAmount={cardDamage}
+          boostCount={boostCount}
+          tokens={cardTokens}
+          assignmentText={!suppressAssignmentText && parentCard ? `↳ ${cardLabel(parentCard)}` : ""}
+          attachedText={
+            !suppressAssignmentText && attachedChildren.length > 0
+              ? `+ ${attachedChildren.map((child) => cardLabel(child)).join(", ")}`
+              : ""
+          }
+          isRotated={isRotatedCard}
+          isLocation={isLocationCard}
+          displayRotated={isInkwellZone && isRotatedCard}
+          forcePortraitHover={isInkwellZone}
+          isMultiSelected={isInkwellZone && isMultiSelected}
+        />
+
+        {cardDamage > 0 && (
+          <div style={damageBadgeStyle}>
+            {cardDamage}
+          </div>
+        )}
+
+        {boostCount > 0 && (
+          <div style={boostCountBadgeStyle}>
+            ⚡ {boostCount}
+          </div>
+        )}
+
+        {cardTokens.length > 0 && (
+          <div style={cardMetaRowStyle}>
+            {cardTokens.map((token) => (
+              <span key={token} style={tokenBadgeStyle}>{token}</span>
+            ))}
+          </div>
+        )}
+      </button>
+    );
+  }
+
+  function renderBoardCluster(entry, compact = false) {
+    const itemChildren = itemChildrenFor(entry.key);
+
+    return (
+      <div key={`board-cluster-${entry.key}`} style={boardVisibleClusterStyle}>
+        {renderInteractiveCard(entry, { compact, suppressAssignmentText: true })}
+        {itemChildren.length > 0 && (
+          <div style={boardVisibleAttachedItemsStyle}>
+            {itemChildren.map((itemEntry, itemIndex) => (
+              <div
+                key={`board-attached-item-${itemEntry.key}`}
+                style={itemIndex > 0 ? { marginLeft: "-74px" } : {}}
+              >
+                {renderInteractiveCard(itemEntry, {
+                  compact: true,
+                  suppressAssignmentText: true,
+                  shellStyle: { margin: 0 }
+                })}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderBoardContents() {
+    const locationEntries = cardEntries.filter((entry) => (tags?.[entry.key] || []).includes("Location"));
+    const attachedKeys = new Set(Object.keys(attachments || {}));
+    const unassignedEntries = cardEntries.filter(
+      (entry) => !(tags?.[entry.key] || []).includes("Location") && !attachedKeys.has(entry.key) && !isInsideLocation(entry)
+    );
+
+    return (
+      <div style={yourBoardStructuredLayoutStyle}>
+        {unassignedEntries.length > 0 && (
+          <div style={yourBoardSectionStyle}>
+            <div style={yourBoardSectionTitleStyle}>Unassigned</div>
+            <div style={yourBoardCardGroupRowStyle}>
+              {unassignedEntries.map((entry) => renderBoardCluster(entry))}
+            </div>
+          </div>
+        )}
+
+        {locationEntries.length > 0 && (
+          <div style={yourBoardSectionStyle}>
+            <div style={yourBoardSectionTitleStyle}>Locations</div>
+            <div style={yourLocationGridStyle}>
+              {locationEntries.map((locationEntry) => {
+                const directChildren = nonItemChildrenFor(locationEntry.key);
+                const characterChildren = directChildren.filter((entry) => !(tags?.[entry.key] || []).includes("Location"));
+                const directItemChildren = itemChildrenFor(locationEntry.key);
+
+                return (
+                  <div key={`your-location-${locationEntry.key}`} style={yourLocationLaneStyle}>
+                    <div style={yourLocationHeaderStyle}>
+                      {renderInteractiveCard(locationEntry, { suppressAssignmentText: true })}
+                    </div>
+
+                    <div style={yourLocationContentsStyle}>
+                      <div style={miniBoardSubheadingStyle}>At this location</div>
+                      {characterChildren.length > 0 ? (
+                        <div style={yourLocationCharacterRowStyle}>
+                          {characterChildren.map((entry) => renderBoardCluster(entry, true))}
+                        </div>
+                      ) : (
+                        <p style={miniEmptyTextStyle}>No characters here</p>
+                      )}
+
+                      {directItemChildren.length > 0 && (
+                        <>
+                          <div style={miniBoardSubheadingStyle}>Items / Attached</div>
+                          <div style={yourBoardCardGroupRowStyle}>
+                            {directItemChildren.map((entry) => renderInteractiveCard(entry, {
+                              compact: true,
+                              suppressAssignmentText: true
+                            }))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
@@ -2969,232 +3236,147 @@ function Zone({
       </p>
 
       <div
-        style={isInkwellZone ? inkwellCardRowStyle : isDiscardZone ? discardCardRowStyle : isBoardZone ? boardPlaymatStyle : cardRowStyle}
+        style={isInkwellZone ? inkwellCardRowStyle : isDiscardZone ? discardCardRowStyle : isBoardZone ? boardPlaymatStructuredStyle : cardRowStyle}
         onDragEnter={handleZoneDragOver}
         onDragOver={handleZoneDragOver}
         onDrop={handleZoneDrop}
       >
-        {orderedCardEntries.map(({ card, key, index }) => {
-          const isMultiSelected = selectedMultiCardKeys.includes(key);
-          const isMulliganSelected = selectedMulliganCards.includes(key);
-          const cardDamage = damage[key] || 0;
-          const cardTags = tags[key] || [];
-          const cardTokens = tokens[key] || [];
-          const boostCount = (boosts[key] || []).length;
-          const isLocationCard = cardTags.includes("Location");
-          const isExertedCard = exertedCards.includes(key);
-          const isRotatedCard = isInkwellZone
-            ? isExertedCard
-            : isDiscardZone
-              ? isExertedCard
-              : isExertedCard || isLocationCard;
-          const parentCard = cards.find((possibleParent, parentIndex) => cardKey(possibleParent, parentIndex) === attachments[key]);
-          const attachedChildren = cards.filter((possibleChild, childIndex) => attachments[cardKey(possibleChild, childIndex)] === key);
-          const parentKey = attachments?.[key];
-          const siblingAttachmentKeys = parentKey
-            ? orderedCardEntries
-                .filter((entry) => attachments?.[entry.key] === parentKey)
-                .map((entry) => entry.key)
-            : [];
-          const attachmentSiblingIndex = Math.max(0, siblingAttachmentKeys.indexOf(key));
-          const parentPosition = parentKey ? boardPositions[parentKey] : null;
-          const ownPosition = boardPositions[key];
-          const boardPosition = isBoardZone
-            ? parentPosition
-              ? {
-                  x: parentPosition.x + 34 + attachmentSiblingIndex * 30,
-                  y: parentPosition.y + 126 + attachmentSiblingIndex * 8
-                }
-              : ownPosition
-            : null;
-
-          return (
-            <button
-              key={key}
-              draggable
-              onDragStart={(event) => {
-                const draggedKeys = selectedMultiCardKeys.includes(key) && selectedMultiCardKeys.length > 1
-                  ? selectedMultiCardKeys
-                  : [key];
-
-                event.dataTransfer.setData(
-                  "text/plain",
-                  draggedKeys.length > 1
-                    ? JSON.stringify({ type: "multi", keys: draggedKeys })
-                    : key
-                );
-                event.dataTransfer.effectAllowed = "move";
-              }}
-              onClick={(event) => {
-                event.stopPropagation();
-                if (event.detail > 1) return;
-
-                if (event.shiftKey) {
-                  event.preventDefault();
-                  event.stopPropagation();
-
-                  setSelectedCard(card);
-                  setSelectedCardKey(key);
-                  setSelectedMultiCardKeys?.((current) =>
-                    current.includes(key)
-                      ? current.filter((existingKey) => existingKey !== key)
-                      : [...current, key]
-                  );
-                  return;
-                }
-
-                if (isInkwellZone) {
-                  return;
-                }
-
-                setSelectedMultiCardKeys?.([]);
-
-                if (onCardClick) {
-                  onCardClick(card, key);
-                } else {
-                  setSelectedCard(card);
-                  setSelectedCardKey(key);
-                }
-              }}
-              onDoubleClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-
-                if (clickTimerRef.current) {
-                  clearTimeout(clickTimerRef.current);
-                  clickTimerRef.current = null;
-                }
-
-                if (isInkwellZone) {
-                  const keysToToggle = selectedMultiCardKeys.includes(key) && selectedMultiCardKeys.length > 1
-                    ? selectedMultiCardKeys
-                    : [key];
-                  onDoubleClickCard?.(card, keysToToggle);
-                  return;
-                }
-
-                setSelectedCard(card);
-                setSelectedCardKey(key);
-                setSelectedMultiCardKeys?.([]);
-                onDoubleClickCard?.(card, key);
-              }}
-              onDragEnter={handleZoneDragOver}
-              onDragOver={handleZoneDragOver}
-              onDrop={(event) => {
-                if (!onDropCard || !zoneName) return;
-                event.preventDefault();
-                event.stopPropagation();
-
-                const draggedCardKey = event.dataTransfer.getData("text/plain");
-                if (!draggedCardKey) return;
-
-                if (zoneName === "board" && onCardDropOnCard && draggedCardKey !== key) {
-                  onCardDropOnCard(draggedCardKey, key);
-                  return;
-                }
-
-                onDropCard(draggedCardKey, zoneName, getBoardDropInfo(event));
-              }}
-              onContextMenu={(event) => {
-                onCardContextMenu?.(event, card, key, zoneName);
-              }}
-              style={{
-                ...(isInkwellZone ? inkwellCardStyle : isDiscardZone ? discardCardStyle : isHandZone ? handCardStyle : cardStyle),
-                ...(isInkwellZone && isRotatedCard ? inkwellExertedCardShellStyle : {}),
-                ...(isInkwellZone && index > 0 ? { marginLeft: "-38px" } : {}),
-                ...(isDiscardZone && index > 0 ? { marginLeft: "-48px" } : {}),
-                ...(isBoardZone && boardPosition
-                  ? {
-                      position: "absolute",
-                      left: `${boardPosition.x}px`,
-                      top: `${boardPosition.y}px`
-                    }
-                  : {}),
-                border: isMultiSelected && !isInkwellZone
-                  ? "4px dashed #22c55e"
-                  : isInkwellZone
-                    ? "1px solid transparent"
-                    : isMulliganSelected
-                      ? "3px solid #38bdf8"
-                      : selectedCardKey === key
-                        ? "3px solid #facc15"
-                        : "1px solid #374151",
-                transform: isInkwellZone ? "none" : isRotatedCard ? "rotate(90deg)" : "none"
-              }}
-            >
-              <CardVisual
-                card={card}
-                faceDown={(zoneName === "inkwell" || zoneName === "boostHolding") && !revealedHiddenCardKeys.includes(key)}
-                damageAmount={cardDamage}
-                boostCount={boostCount}
-                tokens={cardTokens}
-                assignmentText={parentCard ? `↳ ${cardLabel(parentCard)}` : ""}
-                attachedText={
-                  attachedChildren.length > 0
-                    ? `+ ${attachedChildren.map((child) => cardLabel(child)).join(", ")}`
-                    : ""
-                }
-                isRotated={isRotatedCard}
-                isLocation={isLocationCard}
-                displayRotated={isInkwellZone && isRotatedCard}
-                forcePortraitHover={isInkwellZone}
-                isMultiSelected={isInkwellZone && isMultiSelected}
-              />
-
-              {cardDamage > 0 && (
-                <div style={damageBadgeStyle}>
-                  {cardDamage}
-                </div>
-              )}
-
-              {boostCount > 0 && (
-                <div style={boostCountBadgeStyle}>
-                  ⚡ {boostCount}
-                </div>
-              )}
-
-              {cardTokens.length > 0 && (
-                <div style={cardMetaRowStyle}>
-                  {cardTokens.map((token) => (
-                    <span key={token} style={tokenBadgeStyle}>{token}</span>
-                  ))}
-                </div>
-              )}
-
-              {parentCard && (
-                <div style={cardAssignmentStyle}>↳ {cardLabel(parentCard)}</div>
-              )}
-
-              {attachedChildren.length > 0 && (
-                <div style={cardAssignmentStyle}>
-                  + {attachedChildren.map((child) => cardLabel(child)).join(", ")}
-                </div>
-              )}
-            </button>
-          );
-        })}
+        {isBoardZone
+          ? renderBoardContents()
+          : cardEntries.map((entry) => renderInteractiveCard(entry))}
       </div>
     </div>
   );
 }
 
 
+const boardPlaymatStructuredStyle = {
+  minHeight: "520px",
+  borderRadius: "10px",
+  background: "rgba(15, 23, 42, 0.35)",
+  border: "1px dashed rgba(148, 163, 184, 0.35)",
+  overflow: "visible",
+  padding: "14px",
+  boxSizing: "border-box"
+};
+
+const yourBoardStructuredLayoutStyle = {
+  display: "grid",
+  gap: "14px",
+  alignItems: "start"
+};
+
+const yourBoardSectionStyle = {
+  border: "1px solid #374151",
+  borderRadius: "12px",
+  background: "#020617",
+  padding: "12px",
+  overflow: "visible"
+};
+
+const yourBoardSectionTitleStyle = {
+  color: "#facc15",
+  fontWeight: "bold",
+  fontSize: "14px",
+  marginBottom: "10px",
+  textAlign: "left"
+};
+
+const yourBoardCardGroupRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "26px",
+  justifyContent: "center",
+  alignItems: "flex-start",
+  overflow: "visible"
+};
+
+const yourLocationGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
+  gap: "16px",
+  alignItems: "start",
+  overflow: "visible"
+};
+
+const yourLocationLaneStyle = {
+  border: "1px solid #334155",
+  borderRadius: "12px",
+  background: "#111827",
+  padding: "12px",
+  overflow: "visible"
+};
+
+const yourLocationHeaderStyle = {
+  display: "flex",
+  justifyContent: "center",
+  marginBottom: "8px",
+  overflow: "visible"
+};
+
+const yourLocationContentsStyle = {
+  borderTop: "1px dashed #475569",
+  paddingTop: "10px",
+  overflow: "visible"
+};
+
+const yourLocationCharacterRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "10px 18px",
+  justifyContent: "center",
+  alignItems: "flex-start",
+  overflow: "visible"
+};
+
+const boardVisibleClusterStyle = {
+  display: "grid",
+  justifyItems: "center",
+  gap: "0",
+  overflow: "visible",
+  position: "relative"
+};
+
+const boardVisibleAttachedItemsStyle = {
+  display: "flex",
+  flexWrap: "nowrap",
+  justifyContent: "center",
+  alignItems: "flex-start",
+  gap: "0px",
+  marginTop: "-86px",
+  marginLeft: "40px",
+  marginBottom: "12px",
+  overflow: "visible",
+  position: "relative",
+  zIndex: 50
+};
+
+const compactBoardCardStyle = {
+  width: "108px",
+  minHeight: "150px"
+};
 
 const miniAttachedClusterStyle = {
   display: "grid",
   justifyItems: "center",
-  gap: "4px",
-  overflow: "visible"
+  gap: "0",
+  overflow: "visible",
+  position: "relative"
 };
 
 const miniAttachedItemsRowStyle = {
   display: "flex",
   flexWrap: "nowrap",
   justifyContent: "center",
+  alignItems: "flex-start",
   gap: "0px",
   paddingTop: "0px",
-  marginTop: "-12px",
-  overflow: "visible"
+  marginTop: "-48px",
+  marginLeft: "22px",
+  marginBottom: "10px",
+  overflow: "visible",
+  position: "relative",
+  zIndex: 40
 };
 
 const contextMenuStyle = {
@@ -3225,6 +3407,13 @@ const contextMenuButtonStyle = {
   cursor: "pointer",
   textAlign: "left",
   fontWeight: "bold"
+};
+
+const contextMenuHintStyle = {
+  color: "#9ca3af",
+  fontSize: "11px",
+  padding: "2px 10px 6px",
+  textAlign: "center"
 };
 
 const contextMenuSectionStyle = {
@@ -3566,11 +3755,38 @@ const cardRowStyle = {
 
 const boardPlaymatStyle = {
   position: "relative",
-  minHeight: "460px",
+  minHeight: "640px",
   borderRadius: "10px",
   background: "rgba(15, 23, 42, 0.35)",
   border: "1px dashed rgba(148, 163, 184, 0.35)",
-  overflow: "visible"
+  overflow: "visible",
+  padding: "18px",
+  boxSizing: "border-box"
+};
+
+const boardLooseCardSpacingStyle = {
+  margin: "18px 26px"
+};
+
+const boardAttachedCardSpacingStyle = {
+  margin: "0"
+};
+
+const boardLocationChildClusterStyle = {
+  marginLeft: "0px",
+  marginTop: "0px",
+  marginRight: "0px",
+  marginBottom: "0px",
+  zIndex: 24,
+  position: "relative"
+};
+
+const boardAttachedItemOverlapStyle = {
+  marginLeft: "-58px",
+  marginTop: "72px",
+  marginRight: "18px",
+  zIndex: 30,
+  position: "relative"
 };
 
 const discardCardRowStyle = {
@@ -3682,16 +3898,15 @@ const hoverDamageBadgeStyle = {
 };
 
 const hoverMetaPanelStyle = {
-  position: "absolute",
-  left: "10px",
-  right: "10px",
-  bottom: "10px",
+  position: "static",
+  width: "350px",
+  maxWidth: "350px",
   display: "grid",
   gap: "6px",
   justifyItems: "center",
   background: "transparent",
   borderRadius: "10px",
-  padding: "0",
+  padding: "8px 0 0",
   border: "none",
   zIndex: 10000
 };

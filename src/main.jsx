@@ -245,6 +245,11 @@ function App() {
   const [rollResults, setRollResults] = useState([]);
   const [rollMessage, setRollMessage] = useState("");
   const [cardContextMenu, setCardContextMenu] = useState(null);
+  const [deckSearchState, setDeckSearchState] = useState(null);
+  const [deckPeekState, setDeckPeekState] = useState(null);
+  const [undoStack, setUndoStack] = useState([]);
+  const [gameLog, setGameLog] = useState([]);
+  const [isShufflingDeck, setIsShufflingDeck] = useState(false);
   const [revealedHiddenCardKeys, setRevealedHiddenCardKeys] = useState([]);
   const [expandedBoardIds, setExpandedBoardIds] = useState([]);
 
@@ -458,7 +463,8 @@ if (selectedTypeFilters.length > 0) {
     nextPlayers,
     nextTurnPlayerId = currentTurnPlayerId,
     nextRollResults = rollResults,
-    nextRollMessage = rollMessage
+    nextRollMessage = rollMessage,
+    nextGameLog = gameLog
   ) {
     if (!currentRoom) return;
 
@@ -468,7 +474,8 @@ if (selectedTypeFilters.length > 0) {
         players: nextPlayers,
         currentTurnPlayerId: nextTurnPlayerId,
         rollResults: nextRollResults,
-        rollMessage: nextRollMessage
+        rollMessage: nextRollMessage,
+        gameLog: nextGameLog
       },
       updated_at: new Date().toISOString()
     });
@@ -487,6 +494,7 @@ if (selectedTypeFilters.length > 0) {
     let nextTurnPlayerId = data?.state?.currentTurnPlayerId || null;
     let nextRollResults = data?.state?.rollResults || [];
     let nextRollMessage = data?.state?.rollMessage || "";
+    let nextGameLog = data?.state?.gameLog || [];
 
     if (!nextPlayers[playerId]) {
       nextPlayers = {
@@ -537,7 +545,8 @@ if (selectedTypeFilters.length > 0) {
         players: nextPlayers,
         currentTurnPlayerId: nextTurnPlayerId,
         rollResults: nextRollResults,
-        rollMessage: nextRollMessage
+        rollMessage: nextRollMessage,
+        gameLog: nextGameLog
       },
       updated_at: new Date().toISOString()
     });
@@ -546,6 +555,7 @@ if (selectedTypeFilters.length > 0) {
     setCurrentTurnPlayerId(nextTurnPlayerId);
     setRollResults(nextRollResults);
     setRollMessage(nextRollMessage);
+    setGameLog(nextGameLog);
   }
 
   async function createRoom() {
@@ -582,7 +592,8 @@ if (selectedTypeFilters.length > 0) {
         players: initialPlayers,
         currentTurnPlayerId: playerId,
         rollResults: [],
-        rollMessage: ""
+        rollMessage: "",
+        gameLog: [{ id: crypto.randomUUID(), message: `${username.trim()} created the room.`, timestamp: new Date().toISOString() }]
       }
     });
 
@@ -639,14 +650,62 @@ if (selectedTypeFilters.length > 0) {
     setCurrentTurnPlayerId(null);
   }
 
-  async function updateMe(nextMe) {
+  async function updateMe(nextMe, logText = null) {
+    const previousMe = players[playerId];
+
+    if (previousMe) {
+      setUndoStack((current) => [previousMe, ...current].slice(0, 20));
+    }
+
     const nextPlayers = {
       ...players,
       [playerId]: nextMe
     };
 
+    const nextGameLog = logText
+      ? [
+          {
+            id: crypto.randomUUID(),
+            message: `${nextMe.username || username || "Player"}: ${logText}`,
+            timestamp: new Date().toISOString()
+          },
+          ...(gameLog || [])
+        ].slice(0, 80)
+      : (gameLog || []);
+
     setPlayers(nextPlayers);
-    await saveGameState(nextPlayers);
+    setGameLog(nextGameLog);
+    await saveGameState(nextPlayers, currentTurnPlayerId, rollResults, rollMessage, nextGameLog);
+  }
+
+  async function undoLastMove() {
+    const previousMe = undoStack[0];
+
+    if (!previousMe) {
+      setMessage("Nothing to undo.");
+      return;
+    }
+
+    const nextPlayers = {
+      ...players,
+      [playerId]: previousMe
+    };
+
+    const logEntry = {
+      id: crypto.randomUUID(),
+      message: `${previousMe.username || username || "Player"}: undid their last move.`,
+      timestamp: new Date().toISOString()
+    };
+    const nextGameLog = [logEntry, ...(gameLog || [])].slice(0, 80);
+
+    setUndoStack((current) => current.slice(1));
+    setPlayers(nextPlayers);
+    setGameLog(nextGameLog);
+    setSelectedCard(null);
+    setSelectedCardKey(null);
+    setSelectedMultiCardKeys([]);
+    setMessage("Undid last move.");
+    await saveGameState(nextPlayers, currentTurnPlayerId, rollResults, rollMessage, nextGameLog);
   }
 
   function toggleMulliganCard(card, key) {
@@ -737,7 +796,7 @@ if (selectedTypeFilters.length > 0) {
         ...(me.tags || {}),
         [selectedCardKey]: nextTagsForCard
       }
-    });
+    }, `${nextTagsForCard.includes(finalTag) ? "added" : "removed"} ${finalTag} tag on ${cardLabel(selectedCardInPlay.card)}.`);
   }
 
   async function addCardToken(token) {
@@ -767,7 +826,7 @@ if (selectedTypeFilters.length > 0) {
         ...(me.tokens || {}),
         [selectedCardKey]: nextTokensForCard
       }
-    });
+    }, `added ${finalToken} token to ${cardLabel(selectedBoardCard)}.`);
   }
 
   async function removeCardToken(token) {
@@ -802,7 +861,7 @@ if (selectedTypeFilters.length > 0) {
         ...(me.attachments || {}),
         [selectedCardKey]: targetKey
       }
-    });
+    }, `attached ${cardLabel(selectedBoardCard)} to another card.`);
   }
 
   async function clearSelectedAssignment() {
@@ -838,6 +897,327 @@ if (selectedTypeFilters.length > 0) {
 
   function closeCardContextMenu() {
     setCardContextMenu(null);
+  }
+
+  function openDeckContextMenu(event) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    setCardContextMenu({
+      kind: "deck",
+      x: event.clientX,
+      y: event.clientY,
+      zoneName: "deck"
+    });
+  }
+
+  function openZoneContextMenu(event, zoneName) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    setCardContextMenu({
+      kind: "zone",
+      x: event.clientX,
+      y: event.clientY,
+      zoneName
+    });
+  }
+
+  function deckSearchText(card) {
+    return [
+      card?.name,
+      card?.simpleName,
+      card?.type,
+      card?.typeLine,
+      card?.type_line,
+      card?.cardType,
+      card?.classification,
+      card?.classifications?.join?.(" ")
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+  }
+
+  async function searchDeckForType(searchType) {
+    startDeckSearch();
+  }
+
+  function startDeckSearch() {
+    const me = players[playerId];
+
+    if (!me || !me.deck || me.deck.length === 0) {
+      setMessage("Your deck is empty.");
+      closeCardContextMenu();
+      return;
+    }
+
+    setDeckSearchState({
+      index: 0,
+      skippedCards: []
+    });
+    closeCardContextMenu();
+  }
+
+  function buildDeckAfterSearch(deck, index, skippedCards = [], selectedCard = null, placement = "remove") {
+    const beforeCurrent = deck.slice(0, index);
+    const afterCurrent = deck.slice(index + 1);
+    const skippedKeys = new Set((skippedCards || []).map((card) => card.instanceId || card.id || card.name));
+    const unskippedBefore = beforeCurrent.filter((card) => !skippedKeys.has(card.instanceId || card.id || card.name));
+    const baseDeck = [...unskippedBefore, ...afterCurrent, ...(skippedCards || [])];
+
+    if (!selectedCard || placement === "remove") return baseDeck;
+    if (placement === "top") return [selectedCard, ...baseDeck];
+    if (placement === "bottom") return [...baseDeck, selectedCard];
+    return baseDeck;
+  }
+
+  async function takeCurrentDeckSearchCard() {
+    const me = players[playerId];
+    if (!me || !deckSearchState || !me.deck?.length) return;
+
+    const index = Math.min(deckSearchState.index, me.deck.length - 1);
+    const chosenCard = me.deck[index];
+    const skippedCards = deckSearchState.skippedCards || [];
+    let remainingDeck = buildDeckAfterSearch(me.deck, index, skippedCards, null, "remove");
+
+    if (deckSearchState.shuffleAfter) {
+      remainingDeck = shuffleArray(remainingDeck);
+    }
+
+    await updateMe({
+      ...me,
+      deck: remainingDeck,
+      hand: [...me.hand, chosenCard]
+    }, "searched their deck.");
+
+    setDeckSearchState(null);
+    setMessage(`Moved ${cardLabel(chosenCard)} to your hand.`);
+  }
+
+  async function putCurrentDeckSearchCardOnTop() {
+    const me = players[playerId];
+    if (!me || !deckSearchState || !me.deck?.length) return;
+
+    const index = Math.min(deckSearchState.index, me.deck.length - 1);
+    const chosenCard = me.deck[index];
+    const skippedCards = deckSearchState.skippedCards || [];
+    let nextDeck = buildDeckAfterSearch(me.deck, index, skippedCards, chosenCard, "top");
+
+    if (deckSearchState.shuffleAfter) {
+      nextDeck = [chosenCard, ...shuffleArray(nextDeck.slice(1))];
+    }
+
+    await updateMe({
+      ...me,
+      deck: nextDeck
+    }, "searched their deck.");
+
+    setDeckSearchState(null);
+    setMessage(`Put ${cardLabel(chosenCard)} on top of your deck.`);
+  }
+
+  async function skipCurrentDeckSearchCard() {
+    const me = players[playerId];
+    if (!me || !deckSearchState || !me.deck?.length) return;
+
+    const index = Math.min(deckSearchState.index, me.deck.length - 1);
+    const currentCard = me.deck[index];
+    const skippedCards = [...(deckSearchState.skippedCards || []), currentCard];
+    const nextIndex = index + 1;
+
+    if (nextIndex >= me.deck.length) {
+      let nextDeck = [...skippedCards];
+      if (deckSearchState.shuffleAfter) {
+        nextDeck = shuffleArray(nextDeck);
+      }
+
+      await updateMe({
+        ...me,
+        deck: nextDeck
+      }, "searched their deck.");
+
+      setDeckSearchState(null);
+      setMessage("You looked through the whole deck and did not choose a card.");
+      return;
+    }
+
+    setDeckSearchState({
+      ...deckSearchState,
+      index: nextIndex,
+      skippedCards
+    });
+  }
+
+  async function putCurrentDeckSearchCardOnBottom() {
+    await skipCurrentDeckSearchCard();
+  }
+
+  function toggleDeckSearchShuffleAfter() {
+    setDeckSearchState((current) => current ? { ...current, shuffleAfter: !current.shuffleAfter } : current);
+  }
+
+  function cancelDeckSearch() {
+    setDeckSearchState(null);
+    setMessage("Deck search canceled.");
+  }
+
+  function startDeckPeek(count = 3) {
+    const me = players[playerId];
+
+    if (!me || !me.deck || me.deck.length === 0) {
+      setMessage("Your deck is empty.");
+      closeCardContextMenu();
+      return;
+    }
+
+    const safeCount = Math.min(count, me.deck.length);
+    setDeckPeekState({
+      cards: me.deck.slice(0, safeCount),
+      rest: me.deck.slice(safeCount)
+    });
+    closeCardContextMenu();
+  }
+
+  function movePeekCard(index, direction) {
+    setDeckPeekState((current) => {
+      if (!current) return current;
+      const nextCards = [...current.cards];
+      const targetIndex = index + direction;
+
+      if (targetIndex < 0 || targetIndex >= nextCards.length) {
+        return current;
+      }
+
+      [nextCards[index], nextCards[targetIndex]] = [nextCards[targetIndex], nextCards[index]];
+      return { ...current, cards: nextCards };
+    });
+  }
+
+  async function saveDeckPeekOrder() {
+    const me = players[playerId];
+    if (!me || !deckPeekState) return;
+
+    await updateMe({
+      ...me,
+      deck: [...deckPeekState.cards, ...deckPeekState.rest]
+    }, "looked at and rearranged cards in their deck.");
+
+    setDeckPeekState(null);
+    setMessage("Saved top-deck order.");
+  }
+
+  function cancelDeckPeek() {
+    setDeckPeekState(null);
+    setMessage("Peek canceled.");
+  }
+
+  async function returnCardsToBottomOfDeck(cardKeys) {
+    const me = players[playerId];
+    const keys = [...new Set(cardKeys || [])].filter(Boolean);
+    if (!me || keys.length === 0) return;
+
+    const selectedSet = new Set(keys);
+    const foundCards = keys
+      .map((key) => ({ key, found: findCardInZones(me, key) }))
+      .filter((entry) => entry.found);
+
+    if (foundCards.length === 0) {
+      setMessage("No selected cards found.");
+      closeCardContextMenu();
+      return;
+    }
+
+    const boostCardsToHold = [];
+    const nextTags = { ...(me.tags || {}) };
+    const nextTokens = { ...(me.tokens || {}) };
+    const nextAttachments = { ...(me.attachments || {}) };
+    const nextBoosts = { ...(me.boosts || {}) };
+    const nextDamage = { ...(me.damage || {}) };
+    const nextBoardPositions = { ...(me.boardPositions || {}) };
+
+    for (const { key, found } of foundCards) {
+      delete nextDamage[key];
+      delete nextTokens[key];
+      delete nextAttachments[key];
+      delete nextBoardPositions[key];
+
+      if (found.zone === "board" && (me.boosts || {})[key]?.length > 0) {
+        boostCardsToHold.push(...((me.boosts || {})[key] || []));
+      }
+
+      delete nextBoosts[key];
+    }
+
+    Object.keys(nextAttachments).forEach((childKey) => {
+      if (selectedSet.has(nextAttachments[childKey])) {
+        delete nextAttachments[childKey];
+      }
+    });
+
+    const movedCards = foundCards.map(({ found }) => found.card);
+
+    const nextMe = {
+      ...me,
+      hand: me.hand.filter((card, index) => !selectedSet.has(cardKey(card, index))),
+      board: me.board.filter((card, index) => !selectedSet.has(cardKey(card, index))),
+      inkwell: me.inkwell.filter((card, index) => !selectedSet.has(cardKey(card, index))),
+      discard: me.discard.filter((card, index) => !selectedSet.has(cardKey(card, index))),
+      boostHolding: (me.boostHolding || []).filter((card, index) => !selectedSet.has(cardKey(card, index))),
+      deck: [...me.deck, ...movedCards],
+      exerted: (me.exerted || []).filter((key) => !selectedSet.has(key)),
+      damage: nextDamage,
+      tags: nextTags,
+      tokens: nextTokens,
+      attachments: nextAttachments,
+      boosts: nextBoosts,
+      boardPositions: nextBoardPositions
+    };
+
+    if (boostCardsToHold.length > 0) {
+      nextMe.boostHolding = [...(nextMe.boostHolding || []), ...boostCardsToHold];
+    }
+
+    setRevealedHiddenCardKeys((current) => current.filter((key) => !selectedSet.has(key)));
+
+    await updateMe(nextMe, `returned ${movedCards.length} card(s) to the bottom of their deck.`);
+
+    setSelectedCard(null);
+    setSelectedCardKey(null);
+    setSelectedMultiCardKeys([]);
+    setSelectedMulliganCards((cards) => cards.filter((key) => !selectedSet.has(key)));
+    closeCardContextMenu();
+    setMessage(`Returned ${movedCards.length} card(s) to the bottom of your deck.`);
+  }
+
+  async function returnContextCardToBottomOfDeck() {
+    if (!cardContextMenu?.key) return;
+    await returnCardsToBottomOfDeck([cardContextMenu.key]);
+  }
+
+  async function returnSelectedCardsToBottomOfDeck() {
+    await returnCardsToBottomOfDeck(selectedMultiCardKeys || []);
+  }
+
+  async function moveRandomCardFromZone(sourceZone, targetDestination) {
+    const me = players[playerId];
+    if (!me || !sourceZone || !Array.isArray(me[sourceZone]) || me[sourceZone].length === 0) {
+      setMessage("That zone is empty.");
+      closeCardContextMenu();
+      return;
+    }
+
+    const randomIndex = Math.floor(Math.random() * me[sourceZone].length);
+    const randomCard = me[sourceZone][randomIndex];
+    const randomKey = cardKey(randomCard, randomIndex);
+
+    if (targetDestination === "bottomDeck") {
+      await returnCardsToBottomOfDeck([randomKey]);
+      return;
+    }
+
+    await moveCardByKey(randomKey, targetDestination);
+    closeCardContextMenu();
   }
 
   async function revealContextCard() {
@@ -880,9 +1260,21 @@ if (selectedTypeFilters.length > 0) {
 
     if (!found || !targetCard) return;
 
-    // Any card already on the board can receive another card by drag-and-drop.
-    // This keeps items visible beside characters and characters visible at locations;
-    // the card is not hidden or removed from the board, only linked by attachments.
+    const draggedTags = me.tags?.[draggedCardKey] || [];
+    const targetTags = me.tags?.[targetKey] || [];
+    const canAttachItemToCharacter =
+      draggedTags.includes("Item") && targetTags.includes("Character");
+    const canAssignCharacterToLocation =
+      draggedTags.includes("Character") && targetTags.includes("Location");
+
+    if (!canAttachItemToCharacter && !canAssignCharacterToLocation) {
+      if (found.zone !== "board") {
+        await moveCardByKey(draggedCardPayload, "board");
+      } else {
+        setMessage("Cards only link when dragging an Item onto a Character, or a Character onto a Location.");
+      }
+      return;
+    }
 
     const nextMe = {
       ...me,
@@ -934,7 +1326,7 @@ if (selectedTypeFilters.length > 0) {
       ...me,
       deck: me.deck.slice(1),
       boosts: nextBoosts
-    });
+    }, `boosted ${cardLabel(selectedBoardCard)}.`);
 
     setMessage(`Boosted ${cardLabel(selectedBoardCard)} from the top of your deck.`);
   }
@@ -967,7 +1359,7 @@ if (selectedTypeFilters.length > 0) {
       ...me,
       boosts: nextBoosts,
       boostHolding: [...(me.boostHolding || []), removedBoost]
-    });
+    }, `removed 1 boost from ${cardLabel(selectedBoardCard)}.`);
 
     setMessage(`Removed 1 boost from ${cardLabel(selectedBoardCard)} and moved it to Boost Holding.`);
   }
@@ -1076,7 +1468,7 @@ if (selectedTypeFilters.length > 0) {
       current.filter((key) => !selectedSet.has(key))
     );
 
-    await updateMe(nextMe);
+    await updateMe(nextMe, `moved ${movedCards.length} card(s) to ${targetZone}.`);
 
     const lastMovedCard = movedCards[movedCards.length - 1];
     const lastIndex = nextMe[targetZone].length - 1;
@@ -1155,7 +1547,7 @@ if (selectedTypeFilters.length > 0) {
 
     setRevealedHiddenCardKeys((current) => current.filter((key) => key !== selectedCardKey));
 
-    await updateMe(nextMe);
+    await updateMe(nextMe, `moved ${cardLabel(found.card)} to ${targetZone}.`);
     setSelectedCard(null);
     setSelectedCardKey(null);
     setSelectedMulliganCards((cards) => cards.filter((c) => c !== selectedCardKey));
@@ -1229,7 +1621,7 @@ if (selectedTypeFilters.length > 0) {
 
     setRevealedHiddenCardKeys((current) => current.filter((key) => key !== draggedCardKey));
 
-    await updateMe(nextMe);
+    await updateMe(nextMe, `moved ${cardLabel(found.card)} to ${targetZone}.`);
     setSelectedCard(found.card);
     setSelectedCardKey(cardKey(found.card, nextMe[targetZone].length - 1));
     setSelectedMultiCardKeys((keys) => keys.filter((key) => key !== draggedCardKey));
@@ -1256,7 +1648,7 @@ if (selectedTypeFilters.length > 0) {
     await updateMe({
       ...me,
       exerted: nextExerted
-    });
+    }, `${shouldExertAll ? "exerted" : "readied"} ${keys.length} card(s).`);
   }
 
   async function changeLore(amount) {
@@ -1266,7 +1658,7 @@ if (selectedTypeFilters.length > 0) {
     await updateMe({
       ...me,
       lore: Math.max(0, me.lore + amount)
-    });
+    }, `${amount > 0 ? "gained" : "lost"} ${Math.abs(amount)} lore.`);
   }
 
   async function readyAllCards() {
@@ -1280,27 +1672,46 @@ if (selectedTypeFilters.length > 0) {
     await updateMe({
       ...me,
       exerted: (me.exerted || []).filter((key) => cantReadyBoardKeys.includes(key))
-    });
+    }, "readied all eligible cards.");
   }
 
   async function changeDamage(amount) {
     const me = players[playerId];
-
-    if (!me || !selectedCardKey || !me.board.some((card, index) => cardKey(card, index) === selectedCardKey)) {
+    if (!me || !selectedCardKey) {
       setMessage("Select one of your board cards first.");
       return;
     }
 
-    const currentDamage = me.damage?.[selectedCardKey] || 0;
-    const nextDamage = Math.max(0, currentDamage + amount);
+    const boardKeys = me.board.map((card, index) => cardKey(card, index));
+    const selectedBoardKeys = [...new Set(selectedMultiCardKeys || [])].filter((key) =>
+      boardKeys.includes(key)
+    );
+
+    const targetKeys = selectedBoardKeys.includes(selectedCardKey) && selectedBoardKeys.length > 0
+      ? selectedBoardKeys
+      : boardKeys.includes(selectedCardKey)
+        ? [selectedCardKey]
+        : [];
+
+    if (targetKeys.length === 0) {
+      setMessage("Select one of your board cards first.");
+      return;
+    }
+
+    const nextDamage = { ...(me.damage || {}) };
+
+    targetKeys.forEach((key) => {
+      nextDamage[key] = Math.max(0, (nextDamage[key] || 0) + amount);
+    });
 
     await updateMe({
       ...me,
-      damage: {
-        ...(me.damage || {}),
-        [selectedCardKey]: nextDamage
-      }
-    });
+      damage: nextDamage
+    }, `${amount > 0 ? "added" : "removed"} damage on ${targetKeys.length} card(s).`);
+
+    if (targetKeys.length > 1) {
+      setMessage(`${amount > 0 ? "Added" : "Removed"} damage on ${targetKeys.length} selected card(s).`);
+    }
   }
 
   async function clearDamage() {
@@ -1330,17 +1741,21 @@ if (selectedTypeFilters.length > 0) {
       ...me,
       deck: me.deck.slice(1),
       hand: [...me.hand, drawnCard]
-    });
+    }, "drew a card.");
   }
 
   async function shuffleDeck() {
     const me = players[playerId];
     if (!me || !me.deck) return;
 
+    setIsShufflingDeck(true);
+
     await updateMe({
       ...me,
       deck: shuffleArray(me.deck)
-    });
+    }, "shuffled their deck.");
+
+    setTimeout(() => setIsShufflingDeck(false), 650);
   }
 
   async function mulliganHand() {
@@ -1354,7 +1769,7 @@ if (selectedTypeFilters.length > 0) {
       ...me,
       deck: shuffledDeck.slice(7),
       hand: shuffledDeck.slice(0, 7)
-    });
+    }, "mulliganed their hand.");
 
     setSelectedCard(null);
     setSelectedCardKey(null);
@@ -1478,10 +1893,24 @@ if (selectedTypeFilters.length > 0) {
     await updateMe({
       ...me,
       revealedCards: nextRevealedCards
-    });
+    }, `revealed ${revealedCards.length} card(s).`);
 
     closeCardContextMenu();
     setMessage(`Revealed ${revealedCards.length} selected card(s).`);
+  }
+
+  async function clearMyRevealedCards() {
+    const me = players[playerId];
+    if (!me) return;
+
+    await updateMe({
+      ...me,
+      revealedCards: []
+    }, "cleared their revealed cards.");
+
+    setSelectedMultiCardKeys([]);
+    closeCardContextMenu();
+    setMessage("Cleared revealed cards.");
   }
 
   async function mulliganSelected() {
@@ -1627,11 +2056,13 @@ if (selectedTypeFilters.length > 0) {
           const nextTurnPlayerId = payload.new?.state?.currentTurnPlayerId;
           const nextRollResults = payload.new?.state?.rollResults;
           const nextRollMessage = payload.new?.state?.rollMessage;
+          const nextGameLog = payload.new?.state?.gameLog;
 
           if (nextPlayers) setPlayers(nextPlayers);
           if (nextTurnPlayerId !== undefined) setCurrentTurnPlayerId(nextTurnPlayerId);
           if (nextRollResults !== undefined) setRollResults(nextRollResults);
           if (nextRollMessage !== undefined) setRollMessage(nextRollMessage);
+          if (nextGameLog !== undefined) setGameLog(nextGameLog || []);
         }
       )
       .subscribe();
@@ -1737,14 +2168,15 @@ if (selectedTypeFilters.length > 0) {
                   <div
                     key={id}
                     onContextMenu={(event) => {
-                      if (id === playerId) return;
                       event.preventDefault();
+                      event.stopPropagation();
                       setExpandedBoardIds((current) =>
                         current.includes(id)
                           ? current.filter((boardId) => boardId !== id)
                           : [...current, id]
                       );
                     }}
+                    title="Right-click to enlarge or restore this board"
                     style={{
                       ...seatStyle,
                       ...(expandedBoardIds.includes(id) ? expandedSeatStyle : {}),
@@ -1757,6 +2189,11 @@ if (selectedTypeFilters.length > 0) {
                     <h3 style={{ color: player.color || "white" }}>
                       {player.username}
                     </h3>
+                    <p style={boardZoomHintStyle}>
+                      {expandedBoardIds.includes(id)
+                        ? "Right-click again to restore"
+                        : "Right-click board to enlarge"}
+                    </p>
 
                     <MiniCards
                       cards={player.board}
@@ -1785,7 +2222,12 @@ if (selectedTypeFilters.length > 0) {
                 <div style={topPlayRowStyle}>
                   <div style={smallDeckZoneStyle}>
                     <h2 style={compactZoneTitleStyle}>Deck</h2>
-                    <button onClick={drawCard} style={smallDeckPileStyle}>
+                    <button
+                      onClick={drawCard}
+                      onContextMenu={openDeckContextMenu}
+                      className={isShufflingDeck ? "deck-shuffle-animate" : ""}
+                      style={smallDeckPileStyle}
+                    >
                       <div style={{ fontSize: "13px", fontWeight: "bold" }}>DECK</div>
                       <div style={{ fontSize: "24px", fontWeight: "bold" }}>
                         {me.deck?.length || 0}
@@ -1808,6 +2250,9 @@ if (selectedTypeFilters.length > 0) {
                       </button>
                       <button onClick={shuffleDeck} style={deckActionButtonStyle}>
                         Shuffle Deck
+                      </button>
+                      <button onClick={undoLastMove} style={deckActionButtonStyle}>
+                        Undo Last Move
                       </button>
                       <button onClick={rollForFirstPlayer} style={deckActionButtonStyle}>
                         Roll For First Player
@@ -1835,6 +2280,7 @@ if (selectedTypeFilters.length > 0) {
                     }}
                     onDropCard={moveCardByKey}
                     onCardContextMenu={openCardContextMenu}
+                    onZoneContextMenu={openZoneContextMenu}
                     tags={me.tags || {}}
                     tokens={me.tokens || {}}
                   />
@@ -1860,6 +2306,7 @@ if (selectedTypeFilters.length > 0) {
                     onDropCard={moveCardByKey}
                     onCardDropOnCard={assignCardByDrag}
                     onCardContextMenu={openCardContextMenu}
+                    onZoneContextMenu={openZoneContextMenu}
                   />
                 </div>
 
@@ -1878,6 +2325,7 @@ if (selectedTypeFilters.length > 0) {
                     onDoubleClickCard={toggleExert}
                     onDropCard={moveCardByKey}
                     onCardContextMenu={openCardContextMenu}
+                    onZoneContextMenu={openZoneContextMenu}
                   />
 
                   <Zone
@@ -1892,6 +2340,7 @@ if (selectedTypeFilters.length > 0) {
                     setSelectedCardKey={setSelectedCardKey}
                     onDropCard={moveCardByKey}
                     onCardContextMenu={openCardContextMenu}
+                    onZoneContextMenu={openZoneContextMenu}
                     tags={me.tags || {}}
                     tokens={me.tokens || {}}
                   />
@@ -1950,10 +2399,41 @@ if (selectedTypeFilters.length > 0) {
               onMulliganSelected={mulliganMultiSelected}
               onMoveSelectedTo={(targetZone) => moveMultipleCardsByKeys(selectedMultiCardKeys, targetZone)}
               onRevealSelectedToPlayers={revealMultiSelectedToPlayers}
+              onClearRevealedCards={clearMyRevealedCards}
+              hasRevealedCards={(me.revealedCards || []).length > 0}
+              onReturnCardToBottomDeck={returnContextCardToBottomOfDeck}
+              onReturnSelectedToBottomDeck={returnSelectedCardsToBottomOfDeck}
+              onSearchDeckFor={searchDeckForType}
+              onPeekDeck={startDeckPeek}
+              onMoveRandomZoneCard={moveRandomCardFromZone}
               onChangeDamage={changeDamage}
               selectedMultiCardKeys={selectedMultiCardKeys}
             />
           )}
+
+          {deckSearchState && me && (
+            <DeckSearchOverlay
+              deck={me.deck || []}
+              searchState={deckSearchState}
+              onTake={takeCurrentDeckSearchCard}
+              onPutTop={putCurrentDeckSearchCardOnTop}
+              onPutBottom={putCurrentDeckSearchCardOnBottom}
+              onSkip={skipCurrentDeckSearchCard}
+              onToggleShuffleAfter={toggleDeckSearchShuffleAfter}
+              onCancel={cancelDeckSearch}
+            />
+          )}
+
+          {deckPeekState && (
+            <DeckPeekOverlay
+              peekState={deckPeekState}
+              onMoveCard={movePeekCard}
+              onSave={saveDeckPeekOrder}
+              onCancel={cancelDeckPeek}
+            />
+          )}
+
+          <GameLog entries={gameLog} />
 
           {selectedCard && (
             <p>
@@ -1968,7 +2448,7 @@ if (selectedTypeFilters.length > 0) {
   }
 
   return (
-    <div style={pageStyle}>
+    <div style={loginPageStyle}>
       <h1>Lorcana Table 🎴</h1>
 
       <div style={panelStyle}>
@@ -2234,6 +2714,117 @@ if (selectedTypeFilters.length > 0) {
   );
 }
 
+function GameLog({ entries = [] }) {
+  if (!entries.length) return null;
+
+  return (
+    <div style={gameLogPanelStyle}>
+      <div style={gameLogTitleStyle}>Game Log</div>
+      <div style={gameLogListStyle}>
+        {entries.slice(0, 12).map((entry) => (
+          <div key={entry.id || entry.timestamp} style={gameLogEntryStyle}>
+            <span>{entry.message}</span>
+            {entry.timestamp && (
+              <small>{new Date(entry.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</small>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DeckPeekOverlay({ peekState, onMoveCard, onSave, onCancel }) {
+  if (!peekState || !peekState.cards?.length) return null;
+
+  return (
+    <div style={deckSearchOverlayStyle}>
+      <div style={deckSearchModalStyle}>
+        <h2>Peek / Rearrange Top of Deck</h2>
+        <p style={helperTextStyle}>Leftmost card will be the top card after saving.</p>
+
+        <div style={deckPeekRowStyle}>
+          {peekState.cards.map((card, index) => (
+            <div key={card.instanceId || `${card.id}-${index}`} style={deckPeekCardWrapStyle}>
+              <CardVisual card={card} isMini />
+              <div style={deckSearchButtonRowStyle}>
+                <button onClick={() => onMoveCard(index, -1)} style={smallButtonStyle} disabled={index === 0}>←</button>
+                <button onClick={() => onMoveCard(index, 1)} style={smallButtonStyle} disabled={index === peekState.cards.length - 1}>→</button>
+              </div>
+              <small>Position {index + 1}</small>
+            </div>
+          ))}
+        </div>
+
+        <div style={deckSearchButtonRowStyle}>
+          <button onClick={onSave} style={{ ...buttonStyle, background: "#facc15", color: "#111827" }}>Save Order</button>
+          <button onClick={onCancel} style={buttonStyle}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeckSearchOverlay({ deck = [], searchState, onTake, onPutTop, onPutBottom, onSkip, onToggleShuffleAfter, onCancel }) {
+  if (!searchState || deck.length === 0) return null;
+
+  const safeIndex = Math.min(searchState.index || 0, deck.length - 1);
+  const card = deck[safeIndex];
+  const skippedCount = (searchState.skippedCards || []).length;
+
+  return (
+    <div
+      style={deckSearchOverlayStyle}
+      onClick={(event) => event.stopPropagation()}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      <div style={deckSearchModalStyle}>
+        <h2 style={{ marginTop: 0 }}>Search Deck</h2>
+        <p style={helperTextStyle}>
+          Card {safeIndex + 1} of {deck.length}. Skipped cards go to the bottom.
+        </p>
+
+        <div style={deckSearchCardFrameStyle}>
+          <CardVisual card={card} />
+        </div>
+
+        <strong style={{ color: "#facc15" }}>{cardLabel(card)}</strong>
+
+        <div style={deckSearchButtonRowStyle}>
+          <button onClick={onTake} style={{ ...buttonStyle, background: "#22c55e", color: "#052e16" }}>
+            Take to Hand
+          </button>
+          <button onClick={onPutTop} style={{ ...buttonStyle, background: "#facc15", color: "#111827" }}>
+            Put on Top
+          </button>
+          <button onClick={onPutBottom} style={buttonStyle}>
+            Put on Bottom / Next
+          </button>
+          <button
+            onClick={onToggleShuffleAfter}
+            style={{
+              ...buttonStyle,
+              background: searchState.shuffleAfter ? "#22c55e" : "#374151",
+              color: searchState.shuffleAfter ? "#052e16" : "white"
+            }}
+          >
+            {searchState.shuffleAfter ? "✓ Shuffle After Search" : "Shuffle After Search"}
+          </button>
+          <button onClick={onCancel} style={{ ...buttonStyle, background: "#7f1d1d" }}>
+            Cancel Search
+          </button>
+        </div>
+
+        {skippedCount > 0 && (
+          <small style={helperTextStyle}>
+            {skippedCount} skipped card(s) waiting to go to the bottom.
+          </small>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function RevealedCardsPanel({ cards = [] }) {
   if (!cards.length) return null;
 
@@ -2380,13 +2971,75 @@ function CardContextMenu({
   onMulliganSelected,
   onMoveSelectedTo,
   onRevealSelectedToPlayers,
+  onClearRevealedCards,
+  hasRevealedCards = false,
+  onReturnCardToBottomDeck,
+  onReturnSelectedToBottomDeck,
+  onSearchDeckFor,
+  onPeekDeck,
+  onMoveRandomZoneCard,
   onChangeDamage,
   selectedMultiCardKeys = []
 }) {
   const selectedTags = tags[menu.key] || [];
   const selectedTokens = tokens[menu.key] || [];
-  const isInkwell = menu.zoneName === "inkwell" || menu.zoneName === "boostHolding";
+  const isInkwell = menu.zoneName === "inkwell";
   const isRevealed = revealedHiddenCardKeys.includes(menu.key);
+
+  if (menu.kind === "deck") {
+    return (
+      <div
+        style={{
+          ...contextMenuStyle,
+          left: Math.max(8, Math.min(menu.x, window.innerWidth - 288)),
+          top: Math.max(8, Math.min(menu.y, window.innerHeight - 220)),
+          bottom: "auto"
+        }}
+        onClick={(event) => event.stopPropagation()}
+        onContextMenu={(event) => event.preventDefault()}
+      >
+        <strong>Deck</strong>
+        <button
+          onClick={() => onSearchDeckFor?.()}
+          style={{ ...contextMenuButtonStyle, background: "#facc15", color: "#111827" }}
+        >
+          Search Deck
+        </button>
+        <small style={contextMenuHintStyle}>
+          Look through cards one at a time. Skipped cards go to the bottom when you choose one.
+        </small>
+        <div style={contextMenuSectionStyle}>Peek / Rearrange</div>
+        <button onClick={() => onPeekDeck?.(1)} style={contextMenuButtonStyle}>Peek Top 1</button>
+        <button onClick={() => onPeekDeck?.(3)} style={contextMenuButtonStyle}>Peek Top 3</button>
+        <button onClick={() => onPeekDeck?.(5)} style={contextMenuButtonStyle}>Peek Top 5</button>
+      </div>
+    );
+  }
+
+  if (menu.kind === "zone") {
+    const zoneLabel = { hand: "Your Hand", board: "Your Board", inkwell: "Your Inkwell", discard: "Your Discard" }[menu.zoneName] || menu.zoneName;
+
+    return (
+      <div
+        style={{
+          ...contextMenuStyle,
+          left: Math.max(8, Math.min(menu.x, window.innerWidth - 288)),
+          top: Math.max(8, Math.min(menu.y, window.innerHeight - 360)),
+          bottom: "auto"
+        }}
+        onClick={(event) => event.stopPropagation()}
+        onContextMenu={(event) => event.preventDefault()}
+      >
+        <strong>{zoneLabel}</strong>
+        <div style={contextMenuSectionStyle}>Move Random Card To</div>
+        <button onClick={() => onMoveRandomZoneCard?.(menu.zoneName, "inkwell")} style={contextMenuButtonStyle}>Inkwell</button>
+        <button onClick={() => onMoveRandomZoneCard?.(menu.zoneName, "hand")} style={contextMenuButtonStyle}>Your Hand</button>
+        <button onClick={() => onMoveRandomZoneCard?.(menu.zoneName, "board")} style={contextMenuButtonStyle}>Your Board</button>
+        <button onClick={() => onMoveRandomZoneCard?.(menu.zoneName, "discard")} style={contextMenuButtonStyle}>Discard</button>
+        <button onClick={() => onMoveRandomZoneCard?.(menu.zoneName, "bottomDeck")} style={contextMenuButtonStyle}>Bottom of Deck</button>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -2401,6 +3054,15 @@ function CardContextMenu({
     >
       <strong>{cardLabel(menu.card)}</strong>
 
+      {hasRevealedCards && (
+        <button
+          onClick={() => onClearRevealedCards?.()}
+          style={{ ...contextMenuButtonStyle, background: "#475569" }}
+        >
+          Clear Revealed Cards
+        </button>
+      )}
+
       {menu.zoneName === "hand" && selectedMultiCardKeys.includes(menu.key) && selectedMultiCardKeys.length > 0 && (
         <>
           <button
@@ -2414,6 +3076,12 @@ function CardContextMenu({
             style={{ ...contextMenuButtonStyle, background: "#16a34a", color: "#052e16" }}
           >
             Reveal Selected To...
+          </button>
+          <button
+            onClick={() => onReturnSelectedToBottomDeck?.()}
+            style={{ ...contextMenuButtonStyle, background: "#0f172a" }}
+          >
+            Return Selected to Bottom of Deck
           </button>
         </>
       )}
@@ -2444,6 +3112,12 @@ function CardContextMenu({
             style={{ ...contextMenuButtonStyle, background: "#16a34a", color: "#052e16" }}
           >
             Reveal Selected To...
+          </button>
+          <button
+            onClick={() => onReturnSelectedToBottomDeck?.()}
+            style={{ ...contextMenuButtonStyle, background: "#0f172a" }}
+          >
+            Return Selected to Bottom of Deck
           </button>
         </>
       )}
@@ -2493,6 +3167,12 @@ function CardContextMenu({
             style={{ ...contextMenuButtonStyle, background: "#581c87" }}
           >
             Boost-
+          </button>
+          <button
+            onClick={() => onReturnCardToBottomDeck?.()}
+            style={{ ...contextMenuButtonStyle, background: "#0f172a" }}
+          >
+            Return Card to Bottom of Deck
           </button>
 
           <div style={contextMenuSectionStyle}>Tags</div>
@@ -2879,6 +3559,7 @@ function Zone({
   onDropCard,
   onCardDropOnCard,
   onCardContextMenu,
+  onZoneContextMenu,
   tags = {},
   tokens = {},
   attachments = {},
@@ -3086,7 +3767,7 @@ function Zone({
       >
         <CardVisual
           card={card}
-          faceDown={(zoneName === "inkwell" || zoneName === "boostHolding") && !revealedHiddenCardKeys.includes(key)}
+          faceDown={zoneName === "inkwell" && !revealedHiddenCardKeys.includes(key)}
           damageAmount={cardDamage}
           boostCount={boostCount}
           tokens={cardTokens}
@@ -3226,6 +3907,12 @@ function Zone({
       onDragEnter={handleZoneDragOver}
       onDragOver={handleZoneDragOver}
       onDrop={handleZoneDrop}
+      onContextMenu={(event) => {
+        const clickedCard = event.target.closest?.("button");
+        if (!clickedCard) {
+          onZoneContextMenu?.(event, zoneName);
+        }
+      }}
     >
       <h2>{title}</h2>
       <p>{cards.length} card(s)</p>
@@ -3463,8 +4150,21 @@ const pageStyle = {
   boxSizing: "border-box"
 };
 
+const loginPageStyle = {
+  minHeight: "100vh",
+  background: "#0f172a",
+  color: "white",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  fontFamily: "Arial, sans-serif",
+  padding: "8px",
+  boxSizing: "border-box"
+};
+
 const panelStyle = {
   width: "min(90vw, 900px)",
+  margin: "0 auto",
   border: "1px solid #374151",
   borderRadius: "16px",
   padding: "24px",
@@ -3558,9 +4258,17 @@ const seatStyle = {
 
 const expandedSeatStyle = {
   gridColumn: "1 / -1",
-  transform: "scale(1.02)",
+  transform: "scale(1.04)",
   transformOrigin: "top center",
-  zIndex: 5
+  zIndex: 5,
+  borderWidth: "3px",
+  padding: "16px"
+};
+
+const boardZoomHintStyle = {
+  margin: "-4px 0 8px",
+  color: "#9ca3af",
+  fontSize: "11px"
 };
 
 const gameAreaStyle = {
@@ -4384,6 +5092,104 @@ const compactMiniCardStyle = {
   minHeight: "116px"
 };
 
+const deckSearchOverlayStyle = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 20000,
+  background: "rgba(2, 6, 23, 0.78)",
+  display: "grid",
+  placeItems: "center",
+  padding: "20px",
+  boxSizing: "border-box"
+};
+
+const deckSearchModalStyle = {
+  width: "min(92vw, 520px)",
+  maxHeight: "92vh",
+  overflowY: "auto",
+  border: "2px solid #facc15",
+  borderRadius: "16px",
+  background: "#111827",
+  padding: "18px",
+  boxShadow: "0 24px 70px rgba(0,0,0,0.6)",
+  display: "grid",
+  gap: "12px",
+  justifyItems: "center"
+};
+
+const deckSearchCardFrameStyle = {
+  position: "relative",
+  width: "min(72vw, 300px)",
+  display: "grid",
+  justifyItems: "center"
+};
+
+const deckSearchButtonRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "8px",
+  justifyContent: "center"
+};
+
+
+const turnReminderStyle = {
+  border: "1px solid #facc15",
+  borderRadius: "12px",
+  background: "#1f2937",
+  color: "white",
+  padding: "12px",
+  margin: "12px auto",
+  maxWidth: "760px"
+};
+
+const gameLogPanelStyle = {
+  border: "1px solid #374151",
+  borderRadius: "12px",
+  background: "#020617",
+  padding: "10px",
+  margin: "12px auto",
+  maxWidth: "900px",
+  textAlign: "left"
+};
+
+const gameLogTitleStyle = {
+  color: "#facc15",
+  fontWeight: "bold",
+  marginBottom: "6px"
+};
+
+const gameLogListStyle = {
+  display: "grid",
+  gap: "4px",
+  maxHeight: "160px",
+  overflowY: "auto"
+};
+
+const gameLogEntryStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: "10px",
+  borderBottom: "1px solid rgba(55,65,81,0.5)",
+  paddingBottom: "4px",
+  color: "#e5e7eb",
+  fontSize: "12px"
+};
+
+const deckPeekRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "14px",
+  justifyContent: "center",
+  alignItems: "start"
+};
+
+const deckPeekCardWrapStyle = {
+  display: "grid",
+  gap: "6px",
+  justifyItems: "center",
+  width: "120px"
+};
+
 const hoverStyle = document.createElement("style");
 hoverStyle.textContent = `
   .card-hover-preview {
@@ -4393,6 +5199,20 @@ hoverStyle.textContent = `
   button:hover > .card-hover-preview,
   div:hover > .card-hover-preview {
     display: block;
+  }
+
+  .deck-shuffle-animate {
+    animation: deckShuffleWiggle 0.65s ease-in-out;
+  }
+
+  @keyframes deckShuffleWiggle {
+    0% { transform: translateX(0) rotate(0deg); }
+    15% { transform: translateX(-8px) rotate(-6deg); }
+    30% { transform: translateX(8px) rotate(6deg); }
+    45% { transform: translateX(-6px) rotate(-4deg); }
+    60% { transform: translateX(6px) rotate(4deg); }
+    80% { transform: translateX(-3px) rotate(-2deg); }
+    100% { transform: translateX(0) rotate(0deg); }
   }
 
   button:focus > .card-hover-preview,

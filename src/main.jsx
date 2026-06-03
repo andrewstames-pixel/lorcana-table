@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import DailyIframe from "@daily-co/daily-js";
 import ReactDOM from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
 
@@ -708,6 +709,77 @@ if (selectedTypeFilters.length > 0) {
     await saveGameState(nextPlayers, currentTurnPlayerId, rollResults, rollMessage, nextGameLog);
   }
 
+  async function resetGame() {
+    const playerEntries = Object.entries(players || {});
+
+    if (playerEntries.length === 0) {
+      setMessage("No players to reset.");
+      return;
+    }
+
+    const confirmed = window.confirm("Are you sure you want to end this game and reset everyone to a fresh opening hand?");
+    if (!confirmed) return;
+
+    const nextPlayers = {};
+
+    playerEntries.forEach(([id, player]) => {
+      const allCards = [
+        ...(player.deck || []),
+        ...(player.hand || []),
+        ...(player.board || []),
+        ...(player.inkwell || []),
+        ...(player.discard || []),
+        ...(player.boostHolding || []),
+        ...Object.values(player.boosts || {}).flat()
+      ];
+
+      const shuffledDeck = shuffleArray(allCards);
+
+      nextPlayers[id] = {
+        ...player,
+        deck: shuffledDeck.slice(7),
+        hand: shuffledDeck.slice(0, 7),
+        board: [],
+        inkwell: [],
+        discard: [],
+        exerted: [],
+        damage: {},
+        tags: {},
+        tokens: {},
+        attachments: {},
+        boosts: {},
+        boostHolding: [],
+        boardPositions: {},
+        revealedCards: []
+      };
+    });
+
+    const nextTurnPlayerId = Object.keys(nextPlayers)[0] || null;
+    const nextGameLog = [
+      {
+        id: crypto.randomUUID(),
+        message: `${players[playerId]?.username || username || "Player"}: started a new game.`,
+        timestamp: new Date().toISOString()
+      }
+    ];
+
+    setPlayers(nextPlayers);
+    setCurrentTurnPlayerId(nextTurnPlayerId);
+    setRollResults([]);
+    setRollMessage("");
+    setGameLog(nextGameLog);
+    setUndoStack([]);
+    setSelectedCard(null);
+    setSelectedCardKey(null);
+    setSelectedMultiCardKeys([]);
+    setSelectedMulliganCards([]);
+    setRevealedHiddenCardKeys([]);
+    setExpandedBoardIds([]);
+    setMessage("Started a new game and dealt fresh opening hands.");
+
+    await saveGameState(nextPlayers, nextTurnPlayerId, [], "", nextGameLog);
+  }
+
   function toggleMulliganCard(card, key) {
     setSelectedCard(card);
     setSelectedCardKey(key);
@@ -769,12 +841,29 @@ if (selectedTypeFilters.length > 0) {
     return found || null;
   }
 
+  function getActiveTargetKeys({ boardOnly = false } = {}) {
+    const me = players[playerId];
+    if (!me || !selectedCardKey) return [];
+
+    const selectedSet = new Set(selectedMultiCardKeys || []);
+    const candidateKeys = selectedSet.has(selectedCardKey) && selectedSet.size > 0
+      ? [...selectedSet]
+      : [selectedCardKey];
+
+    const boardKeys = new Set((me.board || []).map((card, index) => cardKey(card, index)));
+
+    return [...new Set(candidateKeys)].filter((key) => {
+      if (boardOnly && !boardKeys.has(key)) return false;
+      return Boolean(findCardInZones(me, key));
+    });
+  }
+
   async function toggleCardTag(tag) {
     const me = players[playerId];
-    const selectedCardInPlay = me && selectedCardKey ? findCardInZones(me, selectedCardKey) : null;
+    const targetKeys = getActiveTargetKeys();
 
-    if (!me || !selectedCardKey || !selectedCardInPlay) {
-      setMessage("Select one of your cards first.");
+    if (!me || targetKeys.length === 0) {
+      setMessage("Select one or more of your cards first.");
       return;
     }
 
@@ -785,26 +874,30 @@ if (selectedTypeFilters.length > 0) {
       finalTag = finalTag.trim();
     }
 
-    const currentTags = me.tags?.[selectedCardKey] || [];
-    const nextTagsForCard = currentTags.includes(finalTag)
-      ? currentTags.filter((existingTag) => existingTag !== finalTag)
-      : [...currentTags, finalTag];
+    const nextTags = { ...(me.tags || {}) };
+    const selectedHasTag = (nextTags[selectedCardKey] || []).includes(finalTag);
+
+    targetKeys.forEach((key) => {
+      const currentTags = nextTags[key] || [];
+      nextTags[key] = selectedHasTag
+        ? currentTags.filter((existingTag) => existingTag !== finalTag)
+        : currentTags.includes(finalTag)
+          ? currentTags
+          : [...currentTags, finalTag];
+    });
 
     await updateMe({
       ...me,
-      tags: {
-        ...(me.tags || {}),
-        [selectedCardKey]: nextTagsForCard
-      }
-    }, `${nextTagsForCard.includes(finalTag) ? "added" : "removed"} ${finalTag} tag on ${cardLabel(selectedCardInPlay.card)}.`);
+      tags: nextTags
+    }, `${selectedHasTag ? "removed" : "added"} ${finalTag} tag on ${targetKeys.length} card(s).`);
   }
 
   async function addCardToken(token) {
     const me = players[playerId];
-    const selectedBoardCard = getSelectedBoardCard();
+    const targetKeys = getActiveTargetKeys({ boardOnly: true });
 
-    if (!me || !selectedCardKey || !selectedBoardCard) {
-      setMessage("Select one of your board cards first.");
+    if (!me || targetKeys.length === 0) {
+      setMessage("Select one or more of your board cards first.");
       return;
     }
 
@@ -815,33 +908,37 @@ if (selectedTypeFilters.length > 0) {
       finalToken = finalToken.trim();
     }
 
-    const currentTokens = me.tokens?.[selectedCardKey] || [];
-    const nextTokensForCard = currentTokens.includes(finalToken)
-      ? currentTokens
-      : [...currentTokens, finalToken];
+    const nextTokens = { ...(me.tokens || {}) };
+
+    targetKeys.forEach((key) => {
+      const currentTokens = nextTokens[key] || [];
+      nextTokens[key] = currentTokens.includes(finalToken)
+        ? currentTokens
+        : [...currentTokens, finalToken];
+    });
 
     await updateMe({
       ...me,
-      tokens: {
-        ...(me.tokens || {}),
-        [selectedCardKey]: nextTokensForCard
-      }
-    }, `added ${finalToken} token to ${cardLabel(selectedBoardCard)}.`);
+      tokens: nextTokens
+    }, `added ${finalToken} token to ${targetKeys.length} card(s).`);
   }
 
   async function removeCardToken(token) {
     const me = players[playerId];
-    const selectedBoardCard = getSelectedBoardCard();
+    const targetKeys = getActiveTargetKeys({ boardOnly: true });
 
-    if (!me || !selectedCardKey || !selectedBoardCard) return;
+    if (!me || targetKeys.length === 0) return;
+
+    const nextTokens = { ...(me.tokens || {}) };
+
+    targetKeys.forEach((key) => {
+      nextTokens[key] = (nextTokens[key] || []).filter((existingToken) => existingToken !== token);
+    });
 
     await updateMe({
       ...me,
-      tokens: {
-        ...(me.tokens || {}),
-        [selectedCardKey]: (me.tokens?.[selectedCardKey] || []).filter((existingToken) => existingToken !== token)
-      }
-    });
+      tokens: nextTokens
+    }, `removed ${token} token from ${targetKeys.length} card(s).`);
   }
 
   async function assignSelectedCardTo(targetKey) {
@@ -1306,10 +1403,10 @@ if (selectedTypeFilters.length > 0) {
 
   async function boostSelectedFromDeck() {
     const me = players[playerId];
-    const selectedBoardCard = getSelectedBoardCard();
+    const targetKeys = getActiveTargetKeys({ boardOnly: true });
 
-    if (!me || !selectedCardKey || !selectedBoardCard) {
-      setMessage("Select one of your board cards first.");
+    if (!me || targetKeys.length === 0) {
+      setMessage("Select one or more of your board cards first.");
       return;
     }
 
@@ -1318,50 +1415,61 @@ if (selectedTypeFilters.length > 0) {
       return;
     }
 
-    const boostedCard = makeCardInstance(me.deck[0]);
+    const boostCount = Math.min(targetKeys.length, me.deck.length);
     const nextBoosts = { ...(me.boosts || {}) };
-    nextBoosts[selectedCardKey] = [...(nextBoosts[selectedCardKey] || []), boostedCard];
+    const remainingDeck = [...me.deck];
+
+    targetKeys.slice(0, boostCount).forEach((key) => {
+      const boostedCard = makeCardInstance(remainingDeck.shift());
+      nextBoosts[key] = [...(nextBoosts[key] || []), boostedCard];
+    });
 
     await updateMe({
       ...me,
-      deck: me.deck.slice(1),
+      deck: remainingDeck,
       boosts: nextBoosts
-    }, `boosted ${cardLabel(selectedBoardCard)}.`);
+    }, `boosted ${boostCount} card(s).`);
 
-    setMessage(`Boosted ${cardLabel(selectedBoardCard)} from the top of your deck.`);
+    setMessage(`Boosted ${boostCount} selected card(s) from the top of your deck.`);
   }
 
   async function unboostSelectedToHolding() {
     const me = players[playerId];
-    const selectedBoardCard = getSelectedBoardCard();
+    const targetKeys = getActiveTargetKeys({ boardOnly: true });
 
-    if (!me || !selectedCardKey || !selectedBoardCard) {
-      setMessage("Select one of your board cards first.");
+    if (!me || targetKeys.length === 0) {
+      setMessage("Select one or more of your board cards first.");
       return;
     }
 
-    const currentBoosts = [...((me.boosts || {})[selectedCardKey] || [])];
-    if (currentBoosts.length === 0) {
-      setMessage("This card has no boosts to remove.");
-      return;
-    }
-
-    const removedBoost = currentBoosts[currentBoosts.length - 1];
     const nextBoosts = { ...(me.boosts || {}) };
+    const removedBoosts = [];
 
-    if (currentBoosts.length <= 1) {
-      delete nextBoosts[selectedCardKey];
-    } else {
-      nextBoosts[selectedCardKey] = currentBoosts.slice(0, -1);
+    targetKeys.forEach((key) => {
+      const currentBoosts = [...((nextBoosts || {})[key] || [])];
+      if (currentBoosts.length === 0) return;
+
+      removedBoosts.push(currentBoosts[currentBoosts.length - 1]);
+
+      if (currentBoosts.length <= 1) {
+        delete nextBoosts[key];
+      } else {
+        nextBoosts[key] = currentBoosts.slice(0, -1);
+      }
+    });
+
+    if (removedBoosts.length === 0) {
+      setMessage("Selected card(s) have no boosts to remove.");
+      return;
     }
 
     await updateMe({
       ...me,
       boosts: nextBoosts,
-      boostHolding: [...(me.boostHolding || []), removedBoost]
-    }, `removed 1 boost from ${cardLabel(selectedBoardCard)}.`);
+      boostHolding: [...(me.boostHolding || []), ...removedBoosts]
+    }, `removed ${removedBoosts.length} boost(s).`);
 
-    setMessage(`Removed 1 boost from ${cardLabel(selectedBoardCard)} and moved it to Boost Holding.`);
+    setMessage(`Removed ${removedBoosts.length} boost(s) and moved them to Boost Holding.`);
   }
 
   function parseDraggedCardKeys(draggedCardKey) {
@@ -2089,6 +2197,11 @@ if (selectedTypeFilters.length > 0) {
             Room: <span style={{ color: "#facc15" }}>{currentRoom.code}</span>
           </h2>
 
+          <DailyVideoChatPanel
+            room={currentRoom}
+            username={me?.username || username || "Player"}
+          />
+
           {rollMessage && (
             <div style={rollPanelStyle}>
               <h3>🎲 Roll for First Player</h3>
@@ -2259,6 +2372,9 @@ if (selectedTypeFilters.length > 0) {
                       </button>
                       <button onClick={leaveRoom} style={deckActionButtonStyle}>
                         Leave Room
+                      </button>
+                      <button onClick={resetGame} style={dangerDeckActionButtonStyle}>
+                        New Game / Reset
                       </button>
                     </div>
                   </div>
@@ -2820,6 +2936,138 @@ function DeckSearchOverlay({ deck = [], searchState, onTake, onPutTop, onPutBott
             {skippedCount} skipped card(s) waiting to go to the bottom.
           </small>
         )}
+      </div>
+    </div>
+  );
+}
+
+
+function DailyVideoChatPanel({ room, username }) {
+  const containerRef = useRef(null);
+  const callFrameRef = useRef(null);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [isJoined, setIsJoined] = useState(false);
+  const [videoMessage, setVideoMessage] = useState("");
+
+  const roomUrl = String(import.meta.env.VITE_DAILY_ROOM_URL || "").trim();
+  const displayRoomName = roomUrl
+    ? roomUrl.replace(/^https?:\/\//, "")
+    : "";
+
+  useEffect(() => {
+    return () => {
+      if (callFrameRef.current) {
+        callFrameRef.current.destroy();
+        callFrameRef.current = null;
+      }
+    };
+  }, []);
+
+  async function joinVideoChat() {
+    if (!roomUrl) {
+      setVideoMessage("Add VITE_DAILY_ROOM_URL to your environment first, then restart the dev server.");
+      setIsExpanded(true);
+      return;
+    }
+
+    setIsExpanded(true);
+    setVideoMessage("");
+
+    // Let React render the fixed top video container before Daily creates its iframe.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    if (!containerRef.current) {
+      setVideoMessage("Video container is still loading. Click Join Video again.");
+      return;
+    }
+
+    try {
+      if (!callFrameRef.current) {
+        callFrameRef.current = DailyIframe.createFrame(containerRef.current, {
+          showLeaveButton: true,
+          showFullscreenButton: false,
+          iframeStyle: {
+            position: "relative",
+            display: "block",
+            width: "100%",
+            height: "100%",
+            border: "0",
+            borderRadius: "12px",
+            background: "#020617"
+          }
+        });
+
+        callFrameRef.current.on("left-meeting", () => {
+          setIsJoined(false);
+          setVideoMessage("Left video chat.");
+        });
+
+        callFrameRef.current.on("joined-meeting", () => {
+          setIsJoined(true);
+          setVideoMessage("");
+        });
+      }
+
+      await callFrameRef.current.join({
+        url: roomUrl,
+        userName: username || "Player"
+      });
+    } catch (error) {
+      setVideoMessage(error?.message || "Could not join Daily video chat.");
+    }
+  }
+
+  async function leaveVideoChat() {
+    try {
+      await callFrameRef.current?.leave();
+    } catch {
+      // Video is optional; ignore leave errors.
+    }
+
+    setIsJoined(false);
+  }
+
+  return (
+    <div style={dailyVideoPanelStyle} onClick={(event) => event.stopPropagation()}>
+      <div style={dailyVideoHeaderStyle}>
+        <div>
+          <strong>🎥 Video Chat</strong>
+          <div style={dailyVideoSubtextStyle}>
+            {roomUrl
+              ? `Daily room: ${displayRoomName}`
+              : "Set VITE_DAILY_ROOM_URL to enable embedded video."}
+          </div>
+        </div>
+
+        <div style={dailyVideoButtonRowStyle}>
+          <button
+            onClick={() => setIsExpanded((current) => !current)}
+            style={smallButtonStyle}
+          >
+            {isExpanded ? "Collapse" : "Show"}
+          </button>
+
+          {!isJoined ? (
+            <button onClick={joinVideoChat} style={yellowDoneButtonStyle}>
+              Join Video
+            </button>
+          ) : (
+            <button onClick={leaveVideoChat} style={deckActionButtonStyle}>
+              Leave Video
+            </button>
+          )}
+        </div>
+      </div>
+
+      {videoMessage && <p style={dailyVideoMessageStyle}>{videoMessage}</p>}
+
+      <div
+        style={{
+          ...dailyVideoFrameWrapStyle,
+          display: isExpanded || isJoined ? "block" : "none"
+        }}
+      >
+        <div ref={containerRef} style={dailyVideoFrameStyle} />
       </div>
     </div>
   );
@@ -4183,6 +4431,61 @@ const roomPanelStyle = {
   boxSizing: "border-box"
 };
 
+
+const dailyVideoPanelStyle = {
+  position: "sticky",
+  top: "0",
+  zIndex: 8000,
+  border: "1px solid #374151",
+  borderRadius: "14px",
+  background: "#020617",
+  padding: "10px",
+  margin: "8px 0 14px",
+  textAlign: "left",
+  boxShadow: "0 10px 30px rgba(0,0,0,0.35)"
+};
+
+const dailyVideoHeaderStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: "12px",
+  flexWrap: "wrap"
+};
+
+const dailyVideoSubtextStyle = {
+  color: "#9ca3af",
+  fontSize: "12px",
+  marginTop: "4px"
+};
+
+const dailyVideoButtonRowStyle = {
+  display: "flex",
+  gap: "8px",
+  alignItems: "center",
+  flexWrap: "wrap"
+};
+
+const dailyVideoFrameWrapStyle = {
+  marginTop: "8px",
+  height: "320px",
+  maxHeight: "44vh",
+  borderRadius: "12px",
+  overflow: "hidden",
+  border: "1px solid #1f2937",
+  background: "#020617"
+};
+
+const dailyVideoFrameStyle = {
+  width: "100%",
+  height: "100%"
+};
+
+const dailyVideoMessageStyle = {
+  color: "#facc15",
+  margin: "8px 0 0"
+};
+
 const rollPanelStyle = {
   border: "1px solid #facc15",
   borderRadius: "12px",
@@ -4348,6 +4651,12 @@ const deckActionButtonStyle = {
   fontWeight: "bold",
   fontSize: "12px",
   lineHeight: "1.15"
+};
+
+const dangerDeckActionButtonStyle = {
+  ...deckActionButtonStyle,
+  background: "#7f1d1d",
+  borderColor: "#fecaca"
 };
 
 const yellowDoneButtonStyle = {

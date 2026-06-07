@@ -2973,7 +2973,7 @@ function DailyVideoChatPanel({ room, username }) {
     setIsExpanded(true);
     setVideoMessage("");
 
-    // Let React render the fixed top video container before Daily creates its iframe.
+    // Let React render the normal video container before Daily creates its iframe.
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     if (!containerRef.current) {
@@ -3028,8 +3028,9 @@ function DailyVideoChatPanel({ room, username }) {
   }
 
   return (
-    <div style={dailyVideoPanelStyle} onClick={(event) => event.stopPropagation()}>
-      <div style={dailyVideoHeaderStyle}>
+    <>
+      <div style={dailyVideoPanelStyle} onClick={(event) => event.stopPropagation()}>
+        <div style={dailyVideoHeaderStyle}>
         <div>
           <strong>🎥 Video Chat</strong>
           <div style={dailyVideoSubtextStyle}>
@@ -3061,15 +3062,17 @@ function DailyVideoChatPanel({ room, username }) {
 
       {videoMessage && <p style={dailyVideoMessageStyle}>{videoMessage}</p>}
 
-      <div
-        style={{
-          ...dailyVideoFrameWrapStyle,
-          display: isExpanded || isJoined ? "block" : "none"
-        }}
-      >
-        <div ref={containerRef} style={dailyVideoFrameStyle} />
+        <div
+          style={{
+            ...dailyVideoFrameWrapStyle,
+            display: isExpanded || isJoined ? "block" : "none"
+          }}
+        >
+          <div ref={containerRef} style={dailyVideoFrameStyle} />
+        </div>
       </div>
-    </div>
+
+    </>
   );
 }
 
@@ -4433,16 +4436,21 @@ const roomPanelStyle = {
 
 
 const dailyVideoPanelStyle = {
-  position: "sticky",
-  top: "0",
-  zIndex: 8000,
+  position: "relative",
+  zIndex: 20,
   border: "1px solid #374151",
   borderRadius: "14px",
   background: "#020617",
-  padding: "10px",
-  margin: "8px 0 14px",
+  padding: "10px 14px",
+  margin: "0 0 12px",
   textAlign: "left",
-  boxShadow: "0 10px 30px rgba(0,0,0,0.35)"
+  boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
+  boxSizing: "border-box"
+};
+
+const dailyVideoSpacerStyle = {
+  width: "100%",
+  flexShrink: 0
 };
 
 const dailyVideoHeaderStyle = {

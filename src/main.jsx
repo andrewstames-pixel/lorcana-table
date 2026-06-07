@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import DailyIframe from "@daily-co/daily-js";
 import ReactDOM from "react-dom/client";
+import { createPortal } from "react-dom";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -1822,6 +1823,45 @@ if (selectedTypeFilters.length > 0) {
     }
   }
 
+
+  async function changeResist(amount) {
+    const me = players[playerId];
+    if (!me || !selectedCardKey) {
+      setMessage("Select one of your board cards first.");
+      return;
+    }
+
+    const targetKeys = getActiveTargetKeys({ boardOnly: true });
+
+    if (targetKeys.length === 0) {
+      setMessage("Select one or more of your board cards first.");
+      return;
+    }
+
+    const nextTokens = { ...(me.tokens || {}) };
+
+    targetKeys.forEach((key) => {
+      const currentTokens = nextTokens[key] || [];
+      const existingResistToken = currentTokens.find((token) => /^Resist\s+\d+$/i.test(token));
+      const currentResist = existingResistToken
+        ? Number(existingResistToken.replace(/[^0-9]/g, "")) || 0
+        : 0;
+      const nextResist = Math.max(0, currentResist + amount);
+      const withoutResist = currentTokens.filter((token) => !/^Resist\s+\d+$/i.test(token));
+
+      nextTokens[key] = nextResist > 0
+        ? [...withoutResist, `Resist ${nextResist}`]
+        : withoutResist;
+    });
+
+    await updateMe({
+      ...me,
+      tokens: nextTokens
+    }, `${amount > 0 ? "added" : "removed"} resist on ${targetKeys.length} card(s).`);
+
+    setMessage(`${amount > 0 ? "Added" : "Removed"} resist on ${targetKeys.length} selected card(s).`);
+  }
+
   async function clearDamage() {
     const me = players[playerId];
 
@@ -2337,6 +2377,11 @@ if (selectedTypeFilters.length > 0) {
                     <h2 style={compactZoneTitleStyle}>Deck</h2>
                     <button
                       onClick={drawCard}
+                      onMouseDown={(event) => {
+                        if (event.button === 2 || (event.ctrlKey && event.button === 0)) {
+                          openDeckContextMenu(event);
+                        }
+                      }}
                       onContextMenu={openDeckContextMenu}
                       className={isShufflingDeck ? "deck-shuffle-animate" : ""}
                       style={smallDeckPileStyle}
@@ -2523,6 +2568,7 @@ if (selectedTypeFilters.length > 0) {
               onPeekDeck={startDeckPeek}
               onMoveRandomZoneCard={moveRandomCardFromZone}
               onChangeDamage={changeDamage}
+              onChangeResist={changeResist}
               selectedMultiCardKeys={selectedMultiCardKeys}
             />
           )}
@@ -2891,6 +2937,8 @@ function DeckSearchOverlay({ deck = [], searchState, onTake, onPutTop, onPutBott
   return (
     <div
       style={deckSearchOverlayStyle}
+      onMouseDown={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
     >
@@ -3121,6 +3169,7 @@ function CardVisual({
   isMultiSelected = false
 }) {
   const imageUrl = cardImage(card);
+  const [isHoverPreviewVisible, setIsHoverPreviewVisible] = useState(false);
 
   if (faceDown) {
     return (
@@ -3141,6 +3190,9 @@ function CardVisual({
         <img
           src={imageUrl}
           alt={cardLabel(card)}
+          onMouseEnter={() => setIsHoverPreviewVisible(true)}
+          onMouseLeave={() => setIsHoverPreviewVisible(false)}
+          onMouseDown={() => setIsHoverPreviewVisible(false)}
           style={{
             ...(isMini ? miniCardImageStyle : cardImageStyle),
             ...(displayRotated ? rotatedVisibleCardImageStyle : {}),
@@ -3148,56 +3200,59 @@ function CardVisual({
           }}
         />
 
-        <div
-          className="card-hover-preview"
-          style={{
-            ...hoverPreviewPanelStyle,
-            ...(!forcePortraitHover && isRotated ? hoverPreviewCounterRotateStyle : {})
-          }}
-        >
-          <div style={hoverPreviewCardWrapStyle}>
-            <img
-              src={imageUrl}
-              alt={cardLabel(card)}
-              style={{
-                ...hoverPreviewImageStyle,
-                ...(isLocation && !forcePortraitHover ? hoverPreviewLandscapeImageStyle : {})
-              }}
-            />
+        {isHoverPreviewVisible && createPortal(
+          <div
+            className="card-hover-preview card-hover-preview-portal"
+            style={{
+              ...hoverPreviewPanelStyle,
+              ...(!forcePortraitHover && isRotated && !isLocation ? hoverPreviewCounterRotateStyle : {})
+            }}
+          >
+            <div style={hoverPreviewCardWrapStyle}>
+              <img
+                src={imageUrl}
+                alt={cardLabel(card)}
+                style={{
+                  ...hoverPreviewImageStyle,
+                  ...(isLocation && !forcePortraitHover ? hoverPreviewLandscapeImageStyle : {})
+                }}
+              />
 
-            {damageAmount > 0 && (
-              <div style={hoverDamageBadgeStyle}>
-                {damageAmount}
-              </div>
-            )}
+              {damageAmount > 0 && (
+                <div style={hoverDamageBadgeStyle}>
+                  {damageAmount}
+                </div>
+              )}
 
-            {boostCount > 0 && (
-              <div style={hoverBoostBadgeStyle}>
-                ⚡ Boost {boostCount}
-              </div>
-            )}
+              {boostCount > 0 && (
+                <div style={hoverBoostBadgeStyle}>
+                  ⚡ Boost {boostCount}
+                </div>
+              )}
 
-            {(tokens.length > 0 || assignmentText || attachedText) && (
-              <div style={hoverMetaPanelStyle}>
-                {tokens.length > 0 && (
-                  <div style={hoverMetaRowStyle}>
-                    {tokens.map((token) => (
-                      <span key={token} style={hoverTokenBadgeStyle}>{token}</span>
-                    ))}
-                  </div>
-                )}
+              {(tokens.length > 0 || assignmentText || attachedText) && (
+                <div style={hoverMetaPanelStyle}>
+                  {tokens.length > 0 && (
+                    <div style={hoverMetaRowStyle}>
+                      {tokens.map((token) => (
+                        <span key={token} style={hoverTokenBadgeStyle}>{token}</span>
+                      ))}
+                    </div>
+                  )}
 
-                {assignmentText && (
-                  <div style={hoverAssignmentTextStyle}>{assignmentText}</div>
-                )}
+                  {assignmentText && (
+                    <div style={hoverAssignmentTextStyle}>{assignmentText}</div>
+                  )}
 
-                {attachedText && (
-                  <div style={hoverAssignmentTextStyle}>{attachedText}</div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+                  {attachedText && (
+                    <div style={hoverAssignmentTextStyle}>{attachedText}</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>,
+          document.body
+        )}
       </>
     );
   }
@@ -3230,6 +3285,7 @@ function CardContextMenu({
   onPeekDeck,
   onMoveRandomZoneCard,
   onChangeDamage,
+  onChangeResist,
   selectedMultiCardKeys = []
 }) {
   const selectedTags = tags[menu.key] || [];
@@ -3300,6 +3356,8 @@ function CardContextMenu({
         top: Math.max(8, Math.min(menu.y, window.innerHeight - 440)),
         bottom: "auto"
       }}
+      onMouseDown={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
     >
@@ -3402,6 +3460,22 @@ function CardContextMenu({
             style={{ ...contextMenuButtonStyle, background: "#374151" }}
           >
             Damage-
+          </button>
+          <button
+            onClick={() => {
+              onChangeResist?.(1);
+            }}
+            style={{ ...contextMenuButtonStyle, background: "#0f766e" }}
+          >
+            Resist+
+          </button>
+          <button
+            onClick={() => {
+              onChangeResist?.(-1);
+            }}
+            style={{ ...contextMenuButtonStyle, background: "#134e4a" }}
+          >
+            Resist-
           </button>
           <button
             onClick={() => {
@@ -3994,7 +4068,23 @@ function Zone({
 
           onDropCard(draggedCardKey, zoneName, getBoardDropInfo(event));
         }}
+        onMouseDown={(event) => {
+          if (event.button === 2 || (event.ctrlKey && event.button === 0)) {
+            event.preventDefault();
+            event.stopPropagation();
+            onCardContextMenu?.(event, card, key, zoneName);
+          }
+        }}
+        onAuxClick={(event) => {
+          if (event.button === 2) {
+            event.preventDefault();
+            event.stopPropagation();
+            onCardContextMenu?.(event, card, key, zoneName);
+          }
+        }}
         onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
           onCardContextMenu?.(event, card, key, zoneName);
         }}
         style={{
@@ -4873,24 +4963,35 @@ const cardImageStyle = {
 
 const hoverPreviewPanelStyle = {
   position: "fixed",
-  right: "20px",
-  top: "20px",
+  left: "50%",
+  top: "50%",
+  transform: "translate(-50%, -50%)",
   zIndex: 9999,
-  pointerEvents: "none"
+  pointerEvents: "none",
+  maxWidth: "calc(100vw - 32px)",
+  maxHeight: "calc(100vh - 32px)",
+  overflow: "visible"
 };
 
 const hoverPreviewCounterRotateStyle = {
-  transform: "rotate(-90deg)",
+  // Cancel the visual rotation of exerted/location source cards so the fixed
+  // preview itself stays upright and centered in the viewport. Location cards
+  // then rotate their preview image once, which keeps them landscape.
+  transform: "translate(-50%, -50%) rotate(-90deg)",
   transformOrigin: "center center"
 };
 
 const hoverPreviewCardWrapStyle = {
-  position: "relative"
+  position: "relative",
+  display: "grid",
+  justifyItems: "center",
+  maxWidth: "calc(100vw - 32px)",
+  maxHeight: "calc(100vh - 32px)"
 };
 
 const hoverPreviewImageStyle = {
-  width: "350px",
-  maxHeight: "80vh",
+  width: "min(350px, calc(100vw - 56px))",
+  maxHeight: "calc(100vh - 120px)",
   objectFit: "contain",
   border: "3px solid #facc15",
   borderRadius: "12px",
@@ -4899,9 +5000,13 @@ const hoverPreviewImageStyle = {
 };
 
 const hoverPreviewLandscapeImageStyle = {
+  width: "min(350px, calc(100vh - 160px))",
+  maxWidth: "min(350px, calc(100vh - 160px))",
+  maxHeight: "calc(100vw - 96px)",
   transform: "rotate(90deg)",
   transformOrigin: "center center",
-  margin: "70px 0"
+  margin: "70px 0",
+  objectFit: "contain"
 };
 
 const hoverDamageBadgeStyle = {
@@ -4924,8 +5029,8 @@ const hoverDamageBadgeStyle = {
 
 const hoverMetaPanelStyle = {
   position: "static",
-  width: "350px",
-  maxWidth: "350px",
+  width: "min(350px, calc(100vw - 56px))",
+  maxWidth: "min(350px, calc(100vw - 56px))",
   display: "grid",
   gap: "6px",
   justifyItems: "center",
@@ -5513,9 +5618,19 @@ hoverStyle.textContent = `
     display: none;
   }
 
+  .card-hover-preview-portal {
+    display: block !important;
+    z-index: 2147483647 !important;
+  }
+
   button:hover > .card-hover-preview,
   div:hover > .card-hover-preview {
     display: block;
+  }
+
+  .card-hover-preview img {
+    max-width: calc(100vw - 56px);
+    max-height: calc(100vh - 120px);
   }
 
   .deck-shuffle-animate {

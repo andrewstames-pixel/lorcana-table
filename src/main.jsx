@@ -38,8 +38,7 @@ const TYPE_FILTERS = [
 const CARD_TAG_OPTIONS = [
   "Character",
   "Item",
-  "Location",
-  "Custom"
+  "Location"
 ];
 
 const CARD_TOKEN_OPTIONS = [
@@ -254,6 +253,18 @@ function App() {
   const [isShufflingDeck, setIsShufflingDeck] = useState(false);
   const [revealedHiddenCardKeys, setRevealedHiddenCardKeys] = useState([]);
   const [expandedBoardIds, setExpandedBoardIds] = useState([]);
+  const playersRef = useRef(players);
+  const gameLogRef = useRef(gameLog);
+  const fastSyncTimerRef = useRef(null);
+  const fastSyncPendingRef = useRef(null);
+
+  useEffect(() => {
+    playersRef.current = players;
+  }, [players]);
+
+  useEffect(() => {
+    gameLogRef.current = gameLog;
+  }, [gameLog]);
 
  async function runCardSearch() {
   if (!cardSearch.trim()) {
@@ -1488,6 +1499,26 @@ if (selectedTypeFilters.length > 0) {
     return [draggedCardKey];
   }
 
+  function insertCardsIntoZone(zoneCards, cardsToInsert, insertBeforeKey = null) {
+    const baseCards = [...(zoneCards || [])];
+
+    if (!insertBeforeKey) {
+      return [...baseCards, ...cardsToInsert];
+    }
+
+    const targetIndex = baseCards.findIndex((card, index) => cardKey(card, index) === insertBeforeKey);
+
+    if (targetIndex === -1) {
+      return [...baseCards, ...cardsToInsert];
+    }
+
+    return [
+      ...baseCards.slice(0, targetIndex),
+      ...cardsToInsert,
+      ...baseCards.slice(targetIndex)
+    ];
+  }
+
   async function moveMultipleCardsByKeys(draggedCardKeys, targetZone, dropInfo = null) {
     const me = players[playerId];
     if (!me || !Array.isArray(draggedCardKeys) || draggedCardKeys.length === 0) return;
@@ -1564,7 +1595,11 @@ if (selectedTypeFilters.length > 0) {
       boardPositions: nextBoardPositions
     };
 
-    nextMe[targetZone] = [...(nextMe[targetZone] || []), ...movedCards];
+    nextMe[targetZone] = insertCardsIntoZone(
+      nextMe[targetZone] || [],
+      movedCards,
+      dropInfo?.insertBeforeKey
+    );
 
     if (boostCardsToHold.length > 0) {
       nextMe.boostHolding = [
@@ -1652,7 +1687,7 @@ if (selectedTypeFilters.length > 0) {
       }
     }
 
-    nextMe[targetZone] = [...nextMe[targetZone], found.card];
+    nextMe[targetZone] = insertCardsIntoZone(nextMe[targetZone] || [], [found.card]);
 
     setRevealedHiddenCardKeys((current) => current.filter((key) => key !== selectedCardKey));
 
@@ -1726,7 +1761,11 @@ if (selectedTypeFilters.length > 0) {
       }
     }
 
-    nextMe[targetZone] = [...nextMe[targetZone], found.card];
+    nextMe[targetZone] = insertCardsIntoZone(
+      nextMe[targetZone] || [],
+      [found.card],
+      dropInfo?.insertBeforeKey
+    );
 
     setRevealedHiddenCardKeys((current) => current.filter((key) => key !== draggedCardKey));
 
@@ -1739,6 +1778,112 @@ if (selectedTypeFilters.length > 0) {
     if (boostCardsToHold.length === 0) {
       setMessage(`Moved ${cardLabel(found.card)} to ${targetZone}.`);
     }
+  }
+
+  async function moveContextCardToZone(targetZone) {
+    if (!cardContextMenu?.key) return;
+
+    await moveCardByKey(cardContextMenu.key, targetZone);
+    closeCardContextMenu();
+  }
+
+  async function sendContextCardToInkwellExerted() {
+    const me = players[playerId];
+    if (!me || !cardContextMenu?.key) return;
+
+    const key = cardContextMenu.key;
+    const found = findCardInZones(me, key);
+    if (!found) return;
+
+    const nextMe = {
+      ...me,
+      hand: removeCardFromZone(me.hand, key),
+      board: removeCardFromZone(me.board, key),
+      inkwell: removeCardFromZone(me.inkwell, key),
+      discard: removeCardFromZone(me.discard, key),
+      boostHolding: removeCardFromZone(me.boostHolding || [], key),
+      exerted: [...new Set([...(me.exerted || []).filter((existingKey) => existingKey !== key), key])],
+      damage: { ...(me.damage || {}) },
+      tags: { ...(me.tags || {}) },
+      tokens: { ...(me.tokens || {}) },
+      attachments: { ...(me.attachments || {}) },
+      boosts: { ...(me.boosts || {}) },
+      boardPositions: { ...(me.boardPositions || {}) }
+    };
+
+    delete nextMe.damage[key];
+    const cleanedMetadata = cleanBoardMetadata(me, key);
+    nextMe.tags = cleanedMetadata.tags;
+    nextMe.tokens = cleanedMetadata.tokens;
+    nextMe.attachments = cleanedMetadata.attachments;
+    nextMe.boosts = cleanedMetadata.boosts;
+    nextMe.boardPositions = cleanedMetadata.boardPositions;
+    nextMe.inkwell = [...(nextMe.inkwell || []), found.card];
+
+    setRevealedHiddenCardKeys((current) => current.filter((revealedKey) => revealedKey !== key));
+    await updateMe(nextMe, `sent ${cardLabel(found.card)} to the inkwell exerted.`);
+    setSelectedCard(found.card);
+    setSelectedCardKey(key);
+    setSelectedMultiCardKeys((keys) => keys.filter((selectedKey) => selectedKey !== key));
+    closeCardContextMenu();
+    setMessage(`Sent ${cardLabel(found.card)} to your inkwell face down and exerted.`);
+  }
+
+  async function returnContextDiscardCardToTopDeck() {
+    const me = players[playerId];
+    if (!me || !cardContextMenu?.key) return;
+
+    const key = cardContextMenu.key;
+    const found = findCardInZones(me, key);
+
+    if (!found || found.zone !== "discard") {
+      setMessage("Right-click a card in your discard first.");
+      closeCardContextMenu();
+      return;
+    }
+
+    const nextMe = {
+      ...me,
+      discard: removeCardFromZone(me.discard, key),
+      deck: [found.card, ...(me.deck || [])]
+    };
+
+    await updateMe(nextMe, `put ${cardLabel(found.card)} on top of their deck from discard.`);
+    setSelectedCard(null);
+    setSelectedCardKey(null);
+    setSelectedMultiCardKeys((keys) => keys.filter((selectedKey) => selectedKey !== key));
+    closeCardContextMenu();
+    setMessage(`Returned ${cardLabel(found.card)} to the top of your deck.`);
+  }
+
+  async function editCardToken(oldToken) {
+    const me = players[playerId];
+    const targetKeys = getActiveTargetKeys({ boardOnly: false });
+
+    if (!me || targetKeys.length === 0 || !oldToken) return;
+
+    const nextToken = window.prompt("Edit token:", oldToken);
+    if (!nextToken?.trim()) return;
+
+    const finalToken = nextToken.trim();
+    const nextTokens = { ...(me.tokens || {}) };
+
+    targetKeys.forEach((key) => {
+      nextTokens[key] = (nextTokens[key] || []).map((token) =>
+        token === oldToken ? finalToken : token
+      );
+    });
+
+    await updateMe({
+      ...me,
+      tokens: nextTokens
+    }, `edited token on ${targetKeys.length} card(s).`);
+  }
+
+  async function clearRollBox() {
+    setRollResults([]);
+    setRollMessage("");
+    await saveGameState(players, currentTurnPlayerId, [], "", gameLog);
   }
 
   async function toggleExert(card, keyOrKeys) {
@@ -1760,13 +1905,14 @@ if (selectedTypeFilters.length > 0) {
     }, `${shouldExertAll ? "exerted" : "readied"} ${keys.length} card(s).`);
   }
 
-  async function changeLore(amount) {
-    const me = players[playerId];
+  function changeLore(amount) {
+    const latestPlayers = playersRef.current || players || {};
+    const me = latestPlayers[playerId];
     if (!me) return;
 
-    await updateMe({
+    updateMeFast({
       ...me,
-      lore: Math.max(0, me.lore + amount)
+      lore: Math.max(0, (me.lore || 0) + amount)
     }, `${amount > 0 ? "gained" : "lost"} ${Math.abs(amount)} lore.`);
   }
 
@@ -1784,8 +1930,9 @@ if (selectedTypeFilters.length > 0) {
     }, "readied all eligible cards.");
   }
 
-  async function changeDamage(amount) {
-    const me = players[playerId];
+  function changeDamage(amount) {
+    const latestPlayers = playersRef.current || players || {};
+    const me = latestPlayers[playerId];
     if (!me || !selectedCardKey) {
       setMessage("Select one of your board cards first.");
       return;
@@ -1813,7 +1960,7 @@ if (selectedTypeFilters.length > 0) {
       nextDamage[key] = Math.max(0, (nextDamage[key] || 0) + amount);
     });
 
-    await updateMe({
+    updateMeFast({
       ...me,
       damage: nextDamage
     }, `${amount > 0 ? "added" : "removed"} damage on ${targetKeys.length} card(s).`);
@@ -2148,6 +2295,59 @@ if (selectedTypeFilters.length > 0) {
     await saveGameState(players, nextTurnPlayerId);
   }
 
+  function updateMeFast(nextMe, logText = null) {
+    const latestPlayers = playersRef.current || players || {};
+    const latestGameLog = gameLogRef.current || gameLog || [];
+    const previousMe = latestPlayers[playerId];
+
+    if (previousMe && !fastSyncPendingRef.current) {
+      setUndoStack((current) => [previousMe, ...current].slice(0, 20));
+    }
+
+    const nextPlayers = {
+      ...latestPlayers,
+      [playerId]: nextMe
+    };
+
+    const nextGameLog = logText
+      ? [
+          {
+            id: crypto.randomUUID(),
+            message: `${nextMe.username || username || "Player"}: ${logText}`,
+            timestamp: new Date().toISOString()
+          },
+          ...latestGameLog
+        ].slice(0, 80)
+      : latestGameLog;
+
+    playersRef.current = nextPlayers;
+    gameLogRef.current = nextGameLog;
+    fastSyncPendingRef.current = { nextPlayers, nextGameLog };
+
+    setPlayers(nextPlayers);
+    setGameLog(nextGameLog);
+
+    if (fastSyncTimerRef.current) {
+      clearTimeout(fastSyncTimerRef.current);
+    }
+
+    fastSyncTimerRef.current = setTimeout(async () => {
+      const pending = fastSyncPendingRef.current;
+      fastSyncPendingRef.current = null;
+      fastSyncTimerRef.current = null;
+
+      if (pending) {
+        await saveGameState(
+          pending.nextPlayers,
+          currentTurnPlayerId,
+          rollResults,
+          rollMessage,
+          pending.nextGameLog
+        );
+      }
+    }, 250);
+  }
+
   async function rollForFirstPlayer() {
     const playerEntries = Object.entries(players);
     if (playerEntries.length === 0) return;
@@ -2185,6 +2385,14 @@ if (selectedTypeFilters.length > 0) {
 
     await saveGameState(players, winnerId, nextRollResults, nextRollMessage);
   }
+
+  useEffect(() => {
+    return () => {
+      if (fastSyncTimerRef.current) {
+        clearTimeout(fastSyncTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!currentRoom) return;
@@ -2244,6 +2452,14 @@ if (selectedTypeFilters.length > 0) {
 
           {rollMessage && (
             <div style={rollPanelStyle}>
+              <button
+                type="button"
+                onClick={clearRollBox}
+                aria-label="Close roll results"
+                style={rollCloseButtonStyle}
+              >
+                ×
+              </button>
               <h3>🎲 Roll for First Player</h3>
               <p>{rollMessage}</p>
 
@@ -2303,10 +2519,28 @@ if (selectedTypeFilters.length > 0) {
                     </div>
 
                     <div style={playerLoreBadgeStyle}>
+                      {id === playerId && (
+                        <button
+                          type="button"
+                          onClick={() => changeLore(1)}
+                          style={sidebarLoreButtonStyle}
+                        >
+                          +
+                        </button>
+                      )}
                       <span style={{ fontSize: "22px", fontWeight: "bold" }}>
                         {player.lore}
                       </span>
                       <small>Lore</small>
+                      {id === playerId && (
+                        <button
+                          type="button"
+                          onClick={() => changeLore(-1)}
+                          style={sidebarLoreButtonStyle}
+                        >
+                          −
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -2396,12 +2630,6 @@ if (selectedTypeFilters.length > 0) {
                     <div style={deckActionStackStyle}>
                       <button onClick={readyAllCards} style={deckActionButtonStyle}>
                         Ready All
-                      </button>
-                      <button onClick={() => changeLore(1)} style={deckActionButtonStyle}>
-                        Lore+
-                      </button>
-                      <button onClick={() => changeLore(-1)} style={deckActionButtonStyle}>
-                        Lore-
                       </button>
                       <button onClick={finishTurn} style={yellowDoneButtonStyle}>
                         I'm Done
@@ -2569,6 +2797,11 @@ if (selectedTypeFilters.length > 0) {
               onMoveRandomZoneCard={moveRandomCardFromZone}
               onChangeDamage={changeDamage}
               onChangeResist={changeResist}
+              onEditToken={editCardToken}
+              onBanishCard={() => moveContextCardToZone("discard")}
+              onReturnCardToHand={() => moveContextCardToZone("hand")}
+              onSendCardToInkwellExerted={sendContextCardToInkwellExerted}
+              onReturnDiscardCardToTopDeck={returnContextDiscardCardToTopDeck}
               selectedMultiCardKeys={selectedMultiCardKeys}
             />
           )}
@@ -2595,7 +2828,6 @@ if (selectedTypeFilters.length > 0) {
             />
           )}
 
-          <GameLog entries={gameLog} />
 
           {selectedCard && (
             <p>
@@ -3286,6 +3518,11 @@ function CardContextMenu({
   onMoveRandomZoneCard,
   onChangeDamage,
   onChangeResist,
+  onEditToken,
+  onBanishCard,
+  onReturnCardToHand,
+  onSendCardToInkwellExerted,
+  onReturnDiscardCardToTopDeck,
   selectedMultiCardKeys = []
 }) {
   const selectedTags = tags[menu.key] || [];
@@ -3432,18 +3669,66 @@ function CardContextMenu({
       )}
 
       {isInkwell ? (
-        isRevealed ? (
-          <button onClick={onUnreveal} style={contextMenuButtonStyle}>
-            Unreveal Card
+        <>
+          <div style={contextMenuSectionStyle}>Actions</div>
+          <button
+            onClick={onBanishCard}
+            style={{ ...contextMenuButtonStyle, background: "#7f1d1d" }}
+          >
+            Banish Card
           </button>
-        ) : (
-          <button onClick={onReveal} style={contextMenuButtonStyle}>
-            Reveal Card
+          <button
+            onClick={onReturnCardToHand}
+            style={{ ...contextMenuButtonStyle, background: "#1d4ed8" }}
+          >
+            Return Card to Hand
           </button>
-        )
+          <button
+            onClick={onSendCardToInkwellExerted}
+            style={{ ...contextMenuButtonStyle, background: "#0f766e" }}
+          >
+            Send Card to Inkwell Face Down and Exerted
+          </button>
+
+          {isRevealed ? (
+            <button onClick={onUnreveal} style={contextMenuButtonStyle}>
+              Unreveal Card
+            </button>
+          ) : (
+            <button onClick={onReveal} style={contextMenuButtonStyle}>
+              Reveal Card
+            </button>
+          )}
+        </>
       ) : (
         <>
           <div style={contextMenuSectionStyle}>Actions</div>
+          <button
+            onClick={onBanishCard}
+            style={{ ...contextMenuButtonStyle, background: "#7f1d1d" }}
+          >
+            Banish Card
+          </button>
+          <button
+            onClick={onReturnCardToHand}
+            style={{ ...contextMenuButtonStyle, background: "#1d4ed8" }}
+          >
+            Return Card to Hand
+          </button>
+          <button
+            onClick={onSendCardToInkwellExerted}
+            style={{ ...contextMenuButtonStyle, background: "#0f766e" }}
+          >
+            Send Card to Inkwell Face Down and Exerted
+          </button>
+          {menu.zoneName === "discard" && (
+            <button
+              onClick={onReturnDiscardCardToTopDeck}
+              style={{ ...contextMenuButtonStyle, background: "#581c87" }}
+            >
+              Return Card to Top of Deck
+            </button>
+          )}
           <div style={contextMenuHintStyle}>Click repeatedly to add/remove multiple.</div>
           <button
             onClick={() => {
@@ -3506,7 +3791,7 @@ function CardContextMenu({
               key={tag}
               onClick={() => {
                 onToggleTag(tag);
-                if (tag !== "Custom") onClose();
+                onClose();
               }}
               style={{
                 ...contextMenuButtonStyle,
@@ -3534,6 +3819,25 @@ function CardContextMenu({
               {selectedTokens.includes(token) ? `Remove ${token}` : `+ ${token}`}
             </button>
           ))}
+
+          {selectedTokens
+            .filter((token) => !CARD_TOKEN_OPTIONS.includes(token))
+            .map((token) => (
+              <div key={`custom-token-${token}`} style={contextMenuInlineButtonRowStyle}>
+                <button
+                  onClick={() => onEditToken?.(token)}
+                  style={{ ...contextMenuButtonStyle, flex: 1, background: "#facc15", color: "#111827" }}
+                >
+                  Edit {token}
+                </button>
+                <button
+                  onClick={() => onRemoveToken?.(token)}
+                  style={{ ...contextMenuButtonStyle, flex: "0 0 auto", background: "#7c2d12" }}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
 
         </>
       )}
@@ -3754,6 +4058,7 @@ function MiniCards({ cards, exertedCards = [], damage = {}, tags = {}, tokens = 
           }
           isRotated={isExertedCard || isLocationCard}
           isLocation={isLocationCard}
+          forcePortraitHover={isExertedCard && !isLocationCard}
         />
 
         {(damage[key] || 0) > 0 && (
@@ -3896,6 +4201,34 @@ function Zone({
   const isBoardZone = zoneName === "board";
   const isHandZone = zoneName === "hand";
   const clickTimerRef = useRef(null);
+  const longPressTimerRef = useRef(null);
+  const longPressTriggeredRef = useRef(false);
+
+  function clearLongPressTimer() {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }
+
+  function startLongPressContextMenu(event, card, key, pressedZoneName) {
+    if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
+
+    const x = event.clientX;
+    const y = event.clientY;
+    longPressTriggeredRef.current = false;
+    clearLongPressTimer();
+
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      onCardContextMenu?.({
+        preventDefault() {},
+        stopPropagation() {},
+        clientX: x,
+        clientY: y
+      }, card, key, pressedZoneName);
+    }, 550);
+  }
 
   const cardEntries = cards.map((card, index) => ({
     card,
@@ -4000,6 +4333,13 @@ function Zone({
         }}
         onClick={(event) => {
           event.stopPropagation();
+
+          if (longPressTriggeredRef.current) {
+            longPressTriggeredRef.current = false;
+            event.preventDefault();
+            return;
+          }
+
           if (event.detail > 1) return;
 
           if (event.shiftKey) {
@@ -4061,6 +4401,11 @@ function Zone({
           const draggedCardKey = event.dataTransfer.getData("text/plain");
           if (!draggedCardKey) return;
 
+          if (zoneName === "hand" && draggedCardKey !== key) {
+            onDropCard(draggedCardKey, zoneName, { insertBeforeKey: key });
+            return;
+          }
+
           if (zoneName === "board" && onCardDropOnCard && draggedCardKey !== key) {
             onCardDropOnCard(draggedCardKey, key);
             return;
@@ -4068,6 +4413,18 @@ function Zone({
 
           onDropCard(draggedCardKey, zoneName, getBoardDropInfo(event));
         }}
+        onPointerDown={(event) => {
+          startLongPressContextMenu(event, card, key, zoneName);
+
+          if (event.button === 2 || (event.ctrlKey && event.button === 0)) {
+            event.preventDefault();
+            event.stopPropagation();
+            onCardContextMenu?.(event, card, key, zoneName);
+          }
+        }}
+        onPointerMove={clearLongPressTimer}
+        onPointerUp={clearLongPressTimer}
+        onPointerCancel={clearLongPressTimer}
         onMouseDown={(event) => {
           if (event.button === 2 || (event.ctrlKey && event.button === 0)) {
             event.preventDefault();
@@ -4091,8 +4448,8 @@ function Zone({
           ...(isInkwellZone ? inkwellCardStyle : isDiscardZone ? discardCardStyle : isHandZone ? handCardStyle : cardStyle),
           ...(compact ? compactBoardCardStyle : {}),
           ...(isInkwellZone && isRotatedCard ? inkwellExertedCardShellStyle : {}),
-          ...(isInkwellZone && index > 0 ? { marginLeft: "-38px" } : {}),
-          ...(isDiscardZone && index > 0 ? { marginLeft: "-48px" } : {}),
+          ...(isInkwellZone && index > 0 ? { marginLeft: "0px" } : {}),
+          ...(isDiscardZone && index > 0 ? { marginLeft: "0px" } : {}),
           ...shellStyle,
           border: isMultiSelected && !isInkwellZone
             ? "4px dashed #22c55e"
@@ -4121,7 +4478,7 @@ function Zone({
           isRotated={isRotatedCard}
           isLocation={isLocationCard}
           displayRotated={isInkwellZone && isRotatedCard}
-          forcePortraitHover={isInkwellZone}
+          forcePortraitHover={isInkwellZone || (isRotatedCard && !isLocationCard)}
           isMultiSelected={isInkwellZone && isMultiSelected}
         />
 
@@ -4259,8 +4616,8 @@ function Zone({
       <p>{cards.length} card(s)</p>
       <p style={helperTextStyle}>
         {isInkwellZone
-          ? "Face down. Double-click to exert/ready. Right-click to reveal/unreveal. Shift-click to multi-select."
-          : "Drag cards here to move them to this zone. Shift-click to multi-select. Right-click for card tools."}
+          ? "Face down. Double-click to exert/ready. Right-click or long-press to reveal/unreveal. Shift-click to multi-select."
+          : "Drag cards here to move them to this zone. Shift-click to multi-select. Right-click or long-press for card tools."}
       </p>
 
       <div
@@ -4370,7 +4727,7 @@ const boardVisibleAttachedItemsStyle = {
   flexWrap: "nowrap",
   justifyContent: "center",
   alignItems: "flex-start",
-  gap: "0px",
+  gap: "10px",
   marginTop: "-86px",
   marginLeft: "40px",
   marginBottom: "12px",
@@ -4450,6 +4807,12 @@ const contextMenuSectionStyle = {
   fontSize: "12px",
   fontWeight: "bold",
   textTransform: "uppercase"
+};
+
+const contextMenuInlineButtonRowStyle = {
+  display: "flex",
+  gap: "6px",
+  alignItems: "stretch"
 };
 
 const revealedCardsPanelStyle = {
@@ -4585,12 +4948,29 @@ const dailyVideoMessageStyle = {
 };
 
 const rollPanelStyle = {
+  position: "relative",
   border: "1px solid #facc15",
   borderRadius: "12px",
   background: "#1f2937",
   padding: "12px",
   margin: "16px auto",
   maxWidth: "700px"
+};
+
+const rollCloseButtonStyle = {
+  position: "absolute",
+  top: "8px",
+  right: "10px",
+  width: "28px",
+  height: "28px",
+  borderRadius: "999px",
+  border: "1px solid #facc15",
+  background: "#020617",
+  color: "#facc15",
+  fontSize: "20px",
+  lineHeight: "20px",
+  cursor: "pointer",
+  fontWeight: "bold"
 };
 
 const rollResultStyle = {
@@ -4634,13 +5014,31 @@ const playerSidebarRowStyle = {
 };
 
 const playerLoreBadgeStyle = {
-  minWidth: "56px",
+  minWidth: "72px",
   borderRadius: "10px",
   background: "#1f2937",
   display: "grid",
-  placeItems: "center",
+  gridTemplateColumns: "22px 1fr 22px",
+  gridTemplateRows: "auto auto",
+  alignItems: "center",
+  justifyItems: "center",
+  gap: "2px",
   padding: "6px",
   color: "#facc15"
+};
+
+const sidebarLoreButtonStyle = {
+  gridRow: "1 / span 2",
+  width: "22px",
+  height: "38px",
+  borderRadius: "8px",
+  border: "1px solid #facc15",
+  background: "#020617",
+  color: "#facc15",
+  cursor: "pointer",
+  fontWeight: "bold",
+  fontSize: "16px",
+  lineHeight: "16px"
 };
 
 const playersGridStyle = {
@@ -4659,11 +5057,12 @@ const seatStyle = {
 
 const expandedSeatStyle = {
   gridColumn: "1 / -1",
-  transform: "scale(1.04)",
-  transformOrigin: "top center",
-  zIndex: 5,
+  position: "relative",
+  zIndex: 50,
   borderWidth: "3px",
-  padding: "16px"
+  padding: "22px",
+  minHeight: "78vh",
+  boxShadow: "0 24px 80px rgba(0,0,0,0.75)"
 };
 
 const boardZoomHintStyle = {
@@ -4690,7 +5089,7 @@ const topPlayRowStyle = {
 
 const bottomPlayRowStyle = {
   display: "grid",
-  gridTemplateColumns: "minmax(360px, 0.9fr) minmax(520px, 1.25fr) minmax(280px, 0.75fr)",
+  gridTemplateColumns: "minmax(420px, 0.95fr) minmax(520px, 1.25fr) minmax(280px, 0.75fr)",
   gap: "12px",
   alignItems: "start",
   width: "100%"
@@ -4789,15 +5188,18 @@ const inkwellZoneStyle = {
 const inkwellCardRowStyle = {
   display: "flex",
   flexDirection: "row",
-  flexWrap: "nowrap",
-  gap: "0px",
-  alignItems: "center",
+  flexWrap: "wrap",
+  gap: "14px 12px",
+  alignItems: "flex-start",
   justifyContent: "flex-start",
   minHeight: "132px",
-  overflowX: "auto",
+  height: "auto",
+  overflow: "visible",
   paddingTop: "14px",
+  paddingRight: "12px",
   paddingBottom: "18px",
-  paddingLeft: "36px"
+  paddingLeft: "12px",
+  boxSizing: "border-box"
 };
 
 const inkwellCardStyle = {
@@ -4849,7 +5251,9 @@ const zoneStyle = {
   padding: "10px",
   background: "#020617",
   minHeight: "120px",
-  minWidth: 0
+  minWidth: 0,
+  height: "fit-content",
+  overflow: "visible"
 };
 
 const deckZoneStyle = {
@@ -4907,15 +5311,18 @@ const boardAttachedItemOverlapStyle = {
 const discardCardRowStyle = {
   display: "flex",
   flexDirection: "row",
-  flexWrap: "nowrap",
-  gap: "0px",
-  alignItems: "center",
+  flexWrap: "wrap",
+  gap: "14px 12px",
+  alignItems: "flex-start",
   justifyContent: "flex-start",
   minHeight: "132px",
-  overflowX: "auto",
+  height: "auto",
+  overflow: "visible",
   paddingTop: "14px",
+  paddingRight: "12px",
   paddingBottom: "18px",
-  paddingLeft: "36px"
+  paddingLeft: "12px",
+  boxSizing: "border-box"
 };
 
 const cardStyle = {

@@ -223,6 +223,11 @@ function App() {
   const [deckCards, setDeckCards] = useState([]);
   const [savedDecks, setSavedDecks] = useState(loadSavedDecks);
   const [selectedSavedDeckName, setSelectedSavedDeckName] = useState("");
+  const [profileUser, setProfileUser] = useState(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [isAuthBusy, setIsAuthBusy] = useState(false);
+  const [isDeckCloudBusy, setIsDeckCloudBusy] = useState(false);
 
   const [cardSearch, setCardSearch] = useState("");
   const [selectedInkFilters, setSelectedInkFilters] = useState([]);
@@ -265,6 +270,33 @@ function App() {
   useEffect(() => {
     gameLogRef.current = gameLog;
   }, [gameLog]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!isMounted) return;
+      const user = data?.session?.user || null;
+      setProfileUser(user);
+      if (user) {
+        loadCloudDecks(user.id);
+      }
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      const user = session?.user || null;
+      setProfileUser(user);
+      if (user) {
+        setAuthEmail(user.email || "");
+        loadCloudDecks(user.id);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      listener?.subscription?.unsubscribe?.();
+    };
+  }, []);
 
  async function runCardSearch() {
   if (!cardSearch.trim()) {
@@ -424,7 +456,93 @@ if (selectedTypeFilters.length > 0) {
     event.target.value = "";
   }
 
-  function saveCurrentDeck() {
+  async function loadCloudDecks(userId = profileUser?.id) {
+    if (!userId) return;
+
+    setIsDeckCloudBusy(true);
+
+    const { data, error } = await supabase
+      .from("player_decks")
+      .select("name, cards")
+      .eq("user_id", userId)
+      .order("updated_at", { ascending: false });
+
+    setIsDeckCloudBusy(false);
+
+    if (error) {
+      setMessage(`Could not load profile decks: ${error.message}`);
+      return;
+    }
+
+    const cloudDecks = {};
+    (data || []).forEach((deck) => {
+      cloudDecks[deck.name] = deck.cards || [];
+    });
+
+    const nextDecks = {
+      ...loadSavedDecks(),
+      ...cloudDecks
+    };
+
+    setSavedDecks(nextDecks);
+    saveSavedDecks(nextDecks);
+  }
+
+  async function signInToProfile() {
+    const email = authEmail.trim();
+
+    if (!email || !authPassword) {
+      setMessage("Enter an email and password first.");
+      return;
+    }
+
+    setIsAuthBusy(true);
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password: authPassword
+    });
+    setIsAuthBusy(false);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setAuthPassword("");
+    setMessage("Signed in. Cloud decks loaded.");
+  }
+
+  async function createProfile() {
+    const email = authEmail.trim();
+
+    if (!email || !authPassword) {
+      setMessage("Enter an email and password first.");
+      return;
+    }
+
+    setIsAuthBusy(true);
+    const { error } = await supabase.auth.signUp({
+      email,
+      password: authPassword
+    });
+    setIsAuthBusy(false);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setAuthPassword("");
+    setMessage("Profile created. Check your email if confirmation is enabled, then sign in.");
+  }
+
+  async function signOutOfProfile() {
+    await supabase.auth.signOut();
+    setProfileUser(null);
+    setMessage("Signed out. Local saved decks are still available on this device.");
+  }
+
+  async function saveCurrentDeck() {
     const name = deckName.trim();
 
     if (!name) {
@@ -445,7 +563,30 @@ if (selectedTypeFilters.length > 0) {
     setSavedDecks(nextDecks);
     saveSavedDecks(nextDecks);
     setSelectedSavedDeckName(name);
-    setMessage(`Saved deck: ${name}`);
+
+    if (profileUser) {
+      setIsDeckCloudBusy(true);
+      const { error } = await supabase.from("player_decks").upsert(
+        {
+          user_id: profileUser.id,
+          name,
+          cards: deckCards,
+          updated_at: new Date().toISOString()
+        },
+        { onConflict: "user_id,name" }
+      );
+      setIsDeckCloudBusy(false);
+
+      if (error) {
+        setMessage(`Saved locally, but cloud save failed: ${error.message}`);
+        return;
+      }
+
+      setMessage(`Saved deck to your profile: ${name}`);
+      return;
+    }
+
+    setMessage(`Saved deck locally: ${name}. Sign in to use it on other devices.`);
   }
 
   function loadSelectedDeck(name) {
@@ -457,19 +598,71 @@ if (selectedTypeFilters.length > 0) {
     setMessage(`Loaded deck: ${name}`);
   }
 
-  function deleteSelectedDeck() {
+  async function deleteSelectedDeck() {
     if (!selectedSavedDeckName) {
       setMessage("Choose a saved deck to delete.");
       return;
     }
 
+    const deckToDelete = selectedSavedDeckName;
     const nextDecks = { ...savedDecks };
-    delete nextDecks[selectedSavedDeckName];
+    delete nextDecks[deckToDelete];
 
     setSavedDecks(nextDecks);
     saveSavedDecks(nextDecks);
     setSelectedSavedDeckName("");
+
+    if (profileUser) {
+      const { error } = await supabase
+        .from("player_decks")
+        .delete()
+        .eq("user_id", profileUser.id)
+        .eq("name", deckToDelete);
+
+      if (error) {
+        setMessage(`Deleted locally, but cloud delete failed: ${error.message}`);
+        return;
+      }
+    }
+
     setMessage("Deck deleted.");
+  }
+
+  async function syncLocalDecksToProfile() {
+    if (!profileUser) {
+      setMessage("Sign in first.");
+      return;
+    }
+
+    const localDecks = loadSavedDecks();
+    const entries = Object.entries(localDecks);
+
+    if (entries.length === 0) {
+      setMessage("No local decks to sync.");
+      return;
+    }
+
+    setIsDeckCloudBusy(true);
+    const rows = entries.map(([name, cards]) => ({
+      user_id: profileUser.id,
+      name,
+      cards,
+      updated_at: new Date().toISOString()
+    }));
+
+    const { error } = await supabase
+      .from("player_decks")
+      .upsert(rows, { onConflict: "user_id,name" });
+
+    setIsDeckCloudBusy(false);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    await loadCloudDecks(profileUser.id);
+    setMessage(`Synced ${entries.length} local deck(s) to your profile.`);
   }
 
   async function saveGameState(
@@ -2879,13 +3072,76 @@ if (selectedTypeFilters.length > 0) {
 
         <hr style={{ margin: "30px 0" }} />
 
+        <h2>Player Profile</h2>
+
+        <div style={profilePanelStyle}>
+          {profileUser ? (
+            <>
+              <div>
+                <strong>Signed in:</strong> {profileUser.email}
+                <p style={helperTextStyle}>
+                  Decks you save now are available when you sign in on another device.
+                </p>
+              </div>
+
+              <div style={profileButtonRowStyle}>
+                <button onClick={syncLocalDecksToProfile} disabled={isDeckCloudBusy} style={buttonStyle}>
+                  {isDeckCloudBusy ? "Syncing..." : "Sync Local Decks to Profile"}
+                </button>
+                <button onClick={() => loadCloudDecks()} disabled={isDeckCloudBusy} style={buttonStyle}>
+                  Refresh Profile Decks
+                </button>
+                <button onClick={signOutOfProfile} style={secondaryButtonStyle}>
+                  Sign Out
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p style={helperTextStyle}>
+                Sign in to save decks to your profile and load them on other devices. Local decks still work without signing in.
+              </p>
+
+              <div style={profileAuthGridStyle}>
+                <input
+                  type="email"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="Email"
+                  autoComplete="email"
+                  style={inputStyle}
+                />
+                <input
+                  type="password"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="Password"
+                  autoComplete="current-password"
+                  style={inputStyle}
+                />
+              </div>
+
+              <div style={profileButtonRowStyle}>
+                <button onClick={signInToProfile} disabled={isAuthBusy} style={buttonStyle}>
+                  {isAuthBusy ? "Working..." : "Sign In"}
+                </button>
+                <button onClick={createProfile} disabled={isAuthBusy} style={secondaryButtonStyle}>
+                  Create Profile
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+
+        <hr style={{ margin: "30px 0" }} />
+
         <h2>Deck Manager</h2>
 
         <div style={deckManagerGridStyle}>
           <div style={sectionStyle}>
             <h3>1. Choose a Saved Deck</h3>
             <p style={helperTextStyle}>
-              Pick a saved deck before creating or joining a room.
+              Pick a saved deck before creating or joining a room. Signed-in profile decks appear here.
             </p>
 
             {Object.keys(savedDecks).length === 0 ? (
@@ -2923,7 +3179,7 @@ if (selectedTypeFilters.length > 0) {
               ))}
             </select>
 
-            <button onClick={deleteSelectedDeck} style={buttonStyle}>
+            <button onClick={deleteSelectedDeck} disabled={isDeckCloudBusy} style={buttonStyle}>
               Delete Selected Deck
             </button>
           </div>
@@ -2951,8 +3207,8 @@ if (selectedTypeFilters.length > 0) {
 
             {isImportingTtsDeck && <p>Importing TTS deck...</p>}
 
-            <button onClick={saveCurrentDeck} style={buttonStyle}>
-              Save Current Deck
+            <button onClick={saveCurrentDeck} disabled={isDeckCloudBusy} style={buttonStyle}>
+              {profileUser ? "Save Current Deck to Profile" : "Save Current Deck Locally"}
             </button>
           </div>
         </div>
@@ -4203,6 +4459,14 @@ function Zone({
   const clickTimerRef = useRef(null);
   const longPressTimerRef = useRef(null);
   const longPressTriggeredRef = useRef(false);
+  const zoneRef = useRef(null);
+  const dragSelectStartRef = useRef(null);
+  const dragSelectPointerIdRef = useRef(null);
+  const dragSelectOriginalKeysRef = useRef([]);
+  const dragSelectActiveRef = useRef(false);
+  const suppressNextDragSelectClickRef = useRef(false);
+  const [dragSelectBox, setDragSelectBox] = useState(null);
+  const [isDragSelecting, setIsDragSelecting] = useState(false);
 
   function clearLongPressTimer() {
     if (longPressTimerRef.current) {
@@ -4256,6 +4520,12 @@ function Zone({
   }
 
   function handleZoneDrop(event) {
+    if (dragSelectActiveRef.current || suppressNextDragSelectClickRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     if (!onDropCard || !zoneName) return;
     event.preventDefault();
     event.stopPropagation();
@@ -4264,6 +4534,106 @@ function Zone({
     if (!draggedCardKey) return;
 
     onDropCard(draggedCardKey, zoneName, getBoardDropInfo(event));
+  }
+
+  function getDragSelectBox(start, current) {
+    const left = Math.min(start.x, current.x);
+    const top = Math.min(start.y, current.y);
+    const right = Math.max(start.x, current.x);
+    const bottom = Math.max(start.y, current.y);
+
+    return {
+      left,
+      top,
+      width: right - left,
+      height: bottom - top
+    };
+  }
+
+  function rectanglesOverlap(a, b) {
+    return a.left < b.right &&
+      a.left + a.width > b.left &&
+      a.top < b.bottom &&
+      a.top + a.height > b.top;
+  }
+
+  function updateDragSelection(event) {
+    if (!zoneRef.current || !dragSelectStartRef.current) return;
+
+    const zoneRect = zoneRef.current.getBoundingClientRect();
+    const current = {
+      x: event.clientX - zoneRect.left,
+      y: event.clientY - zoneRect.top
+    };
+    const nextBox = getDragSelectBox(dragSelectStartRef.current, current);
+
+    setDragSelectBox(nextBox);
+
+    const absoluteBox = {
+      left: zoneRect.left + nextBox.left,
+      top: zoneRect.top + nextBox.top,
+      width: nextBox.width,
+      height: nextBox.height
+    };
+
+    const touchedKeys = Array.from(zoneRef.current.querySelectorAll("[data-card-key]")).filter((element) => {
+      const rect = element.getBoundingClientRect();
+      return rectanglesOverlap(absoluteBox, rect);
+    }).map((element) => element.dataset.cardKey).filter(Boolean);
+
+    setSelectedMultiCardKeys?.([...new Set([...(dragSelectOriginalKeysRef.current || []), ...touchedKeys])]);
+  }
+
+  function startDragSelection(event) {
+    if (!setSelectedMultiCardKeys || !zoneRef.current) return;
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey) return;
+
+    const interactiveTarget = event.target.closest?.("button, input, select, textarea, a");
+    if (interactiveTarget) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const zoneRect = zoneRef.current.getBoundingClientRect();
+    dragSelectStartRef.current = {
+      x: event.clientX - zoneRect.left,
+      y: event.clientY - zoneRect.top
+    };
+    dragSelectPointerIdRef.current = event.pointerId;
+    dragSelectOriginalKeysRef.current = event.shiftKey ? [...(selectedMultiCardKeys || [])] : [];
+    dragSelectActiveRef.current = true;
+    setIsDragSelecting(true);
+    setDragSelectBox({
+      left: dragSelectStartRef.current.x,
+      top: dragSelectStartRef.current.y,
+      width: 0,
+      height: 0
+    });
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function moveDragSelection(event) {
+    if (!isDragSelecting || dragSelectPointerIdRef.current !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    updateDragSelection(event);
+  }
+
+  function finishDragSelection(event) {
+    if (!isDragSelecting || dragSelectPointerIdRef.current !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    updateDragSelection(event);
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    dragSelectActiveRef.current = false;
+    suppressNextDragSelectClickRef.current = true;
+    window.setTimeout(() => {
+      suppressNextDragSelectClickRef.current = false;
+    }, 250);
+    dragSelectStartRef.current = null;
+    dragSelectPointerIdRef.current = null;
+    setIsDragSelecting(false);
+    setDragSelectBox(null);
   }
 
   function childrenFor(parentKey) {
@@ -4317,8 +4687,15 @@ function Zone({
     return (
       <button
         key={key}
+        data-card-key={key}
         draggable
         onDragStart={(event) => {
+          if (dragSelectActiveRef.current || suppressNextDragSelectClickRef.current) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+
           const draggedKeys = selectedMultiCardKeys.includes(key) && selectedMultiCardKeys.length > 1
             ? selectedMultiCardKeys
             : [key];
@@ -4360,7 +4737,12 @@ function Zone({
             return;
           }
 
-          setSelectedMultiCardKeys?.([]);
+          const clickedExistingMultiSelection =
+            selectedMultiCardKeys.includes(key) && selectedMultiCardKeys.length > 1;
+
+          if (!clickedExistingMultiSelection) {
+            setSelectedMultiCardKeys?.([]);
+          }
 
           if (onCardClick) {
             onCardClick(card, key);
@@ -4598,9 +4980,21 @@ function Zone({
 
   return (
     <div
+      ref={zoneRef}
       style={{
         ...zoneStyle,
-        ...(isInkwellZone ? inkwellZoneStyle : {})
+        ...(isInkwellZone ? inkwellZoneStyle : {}),
+        position: "relative"
+      }}
+      onPointerDown={startDragSelection}
+      onPointerMove={moveDragSelection}
+      onPointerUp={finishDragSelection}
+      onPointerCancel={finishDragSelection}
+      onClick={(event) => {
+        if (suppressNextDragSelectClickRef.current) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
       }}
       onDragEnter={handleZoneDragOver}
       onDragOver={handleZoneDragOver}
@@ -4630,6 +5024,18 @@ function Zone({
           ? renderBoardContents()
           : cardEntries.map((entry) => renderInteractiveCard(entry))}
       </div>
+
+      {dragSelectBox && (
+        <div
+          style={{
+            ...dragSelectBoxStyle,
+            left: dragSelectBox.left,
+            top: dragSelectBox.top,
+            width: dragSelectBox.width,
+            height: dragSelectBox.height
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -4984,7 +5390,7 @@ const rollResultStyle = {
 
 const roomMainLayoutStyle = {
   display: "grid",
-  gridTemplateColumns: "170px 1fr",
+  gridTemplateColumns: "210px 1fr",
   gap: "10px",
   alignItems: "start",
   marginTop: "12px",
@@ -5002,34 +5408,40 @@ const playerSidebarStyle = {
 };
 
 const playerSidebarRowStyle = {
-  display: "flex",
-  justifyContent: "space-between",
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) auto",
   alignItems: "center",
-  gap: "10px",
+  gap: "8px",
   borderLeft: "4px solid #374151",
   borderRadius: "10px",
   background: "#111827",
   padding: "10px",
-  marginBottom: "10px"
+  marginBottom: "10px",
+  overflow: "hidden",
+  boxSizing: "border-box"
 };
 
 const playerLoreBadgeStyle = {
-  minWidth: "72px",
+  width: "92px",
+  maxWidth: "100%",
   borderRadius: "10px",
   background: "#1f2937",
   display: "grid",
-  gridTemplateColumns: "22px 1fr 22px",
+  gridTemplateColumns: "24px minmax(28px, 1fr) 24px",
   gridTemplateRows: "auto auto",
   alignItems: "center",
   justifyItems: "center",
-  gap: "2px",
+  columnGap: "4px",
+  rowGap: "2px",
   padding: "6px",
-  color: "#facc15"
+  color: "#facc15",
+  boxSizing: "border-box",
+  overflow: "hidden"
 };
 
 const sidebarLoreButtonStyle = {
   gridRow: "1 / span 2",
-  width: "22px",
+  width: "24px",
   height: "38px",
   borderRadius: "8px",
   border: "1px solid #facc15",
@@ -5038,7 +5450,9 @@ const sidebarLoreButtonStyle = {
   cursor: "pointer",
   fontWeight: "bold",
   fontSize: "16px",
-  lineHeight: "16px"
+  lineHeight: "16px",
+  padding: 0,
+  boxSizing: "border-box"
 };
 
 const playersGridStyle = {
@@ -5162,6 +5576,15 @@ const yellowDoneButtonStyle = {
   color: "#111827",
   border: "1px solid #fde68a",
   boxShadow: "0 0 10px rgba(250,204,21,0.35)"
+};
+
+const dragSelectBoxStyle = {
+  position: "absolute",
+  pointerEvents: "none",
+  border: "2px dashed #22c55e",
+  background: "rgba(34, 197, 94, 0.14)",
+  borderRadius: "8px",
+  zIndex: 50
 };
 
 const handCardStyle = {
@@ -5690,6 +6113,28 @@ const deckManagerGridStyle = {
   alignItems: "start"
 };
 
+const profilePanelStyle = {
+  background: "#0f172a",
+  border: "1px solid #334155",
+  borderRadius: "14px",
+  padding: "16px",
+  marginBottom: "10px"
+};
+
+const profileAuthGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+  gap: "10px",
+  marginTop: "10px"
+};
+
+const profileButtonRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "10px",
+  marginTop: "10px"
+};
+
 const savedDecksStyle = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
@@ -5722,6 +6167,11 @@ const buttonStyle = {
   cursor: "pointer",
   fontWeight: "bold",
   margin: "10px"
+};
+
+const secondaryButtonStyle = {
+  ...buttonStyle,
+  background: "#334155"
 };
 
 const inputStyle = {

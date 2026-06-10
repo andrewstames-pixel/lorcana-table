@@ -2932,12 +2932,50 @@ if (selectedTypeFilters.length > 0) {
                     color: isMultiSelectMode ? "#052e16" : "white"
                   }}
                 >
-                  {isMultiSelectMode ? "Select Multiple: ON" : "Select Multiple"}
+                  {isMultiSelectMode ? "🟢 Select Multiple: ON" : "⬜ Select Multiple: OFF"}
                 </button>
                 <button type="button" onClick={() => setTableScale((value) => Math.max(0.8, Number((value - 0.1).toFixed(1))))} style={ipadToolbarButtonStyle}>− Zoom</button>
                 <strong style={ipadZoomLabelStyle}>{Math.round(tableScale * 100)}%</strong>
                 <button type="button" onClick={() => setTableScale((value) => Math.min(1.3, Number((value + 0.1).toFixed(1))))} style={ipadToolbarButtonStyle}>+ Zoom</button>
                 <button type="button" onClick={() => setTableScale(1)} style={ipadToolbarButtonStyle}>Reset Zoom</button>
+              </div>
+
+              <div style={{
+                ...ipadMultiSelectHelpStyle,
+                borderColor: isMultiSelectMode ? "#22c55e" : "#475569",
+                background: isMultiSelectMode ? "rgba(20, 83, 45, 0.92)" : "rgba(15, 23, 42, 0.92)"
+              }}>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setIsMultiSelectMode((current) => !current);
+                  }}
+                  style={{
+                    ...ipadMultiSelectBigButtonStyle,
+                    background: isMultiSelectMode ? "#22c55e" : "#374151",
+                    color: isMultiSelectMode ? "#052e16" : "white"
+                  }}
+                >
+                  {isMultiSelectMode ? "🟢 Multi-Select ON" : "⬜ Multi-Select OFF"}
+                </button>
+                <span style={ipadMultiSelectHelpTextStyle}>
+                  {isMultiSelectMode
+                    ? "Tap cards to add/remove green selection. Then tap one green card and choose an action below."
+                    : "Turn this on for iPad multi-select without Shift-click."}
+                </span>
+                {selectedMultiCardKeys.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setSelectedMultiCardKeys([]);
+                    }}
+                    style={ipadToolbarButtonStyle}
+                  >
+                    Clear Green ({selectedMultiCardKeys.length})
+                  </button>
+                )}
               </div>
 
               <div style={{ ...tableScaleWrapperStyle, transform: `scale(${tableScale})`, width: `${100 / tableScale}%` }}>
@@ -3188,6 +3226,8 @@ if (selectedTypeFilters.length > 0) {
               selectedCardKey={selectedCardKey}
               selectedMultiCardKeys={selectedMultiCardKeys}
               me={me}
+              selectedTags={me.tags?.[selectedCardKey] || []}
+              selectedTokens={me.tokens?.[selectedCardKey] || []}
               onExert={() => toggleExert(selectedCard, selectedMultiCardKeys.includes(selectedCardKey) && selectedMultiCardKeys.length > 1 ? selectedMultiCardKeys : selectedCardKey)}
               onDamagePlus={() => changeDamage(1)}
               onDamageMinus={() => changeDamage(-1)}
@@ -3196,6 +3236,10 @@ if (selectedTypeFilters.length > 0) {
               onInkwellExerted={sendSelectedCardToInkwellExerted}
               onMoveHandLeft={() => moveSelectedHandCard(-1)}
               onMoveHandRight={() => moveSelectedHandCard(1)}
+              onToggleTag={toggleCardTag}
+              onAddToken={addCardToken}
+              onRemoveToken={removeCardToken}
+              onEditToken={editCardToken}
               onClearSelection={() => {
                 setSelectedCard(null);
                 setSelectedCardKey(null);
@@ -3940,6 +3984,8 @@ function TouchActionDrawer({
   selectedCardKey,
   selectedMultiCardKeys = [],
   me,
+  selectedTags = [],
+  selectedTokens = [],
   onExert,
   onDamagePlus,
   onDamageMinus,
@@ -3948,6 +3994,10 @@ function TouchActionDrawer({
   onInkwellExerted,
   onMoveHandLeft,
   onMoveHandRight,
+  onToggleTag,
+  onAddToken,
+  onRemoveToken,
+  onEditToken,
   onClearSelection
 }) {
   const selectedCount = selectedMultiCardKeys.includes(selectedCardKey) && selectedMultiCardKeys.length > 1
@@ -3958,7 +4008,7 @@ function TouchActionDrawer({
   return (
     <div style={touchActionDrawerStyle}>
       <div style={touchActionDrawerHeaderStyle}>
-        <strong>{selectedCount > 1 ? `${selectedCount} selected cards` : cardLabel(selectedCard)}</strong>
+        <strong>{selectedCount > 1 ? `🟢 ${selectedCount} selected cards` : cardLabel(selectedCard)}</strong>
         <button type="button" onClick={onClearSelection} style={touchActionSmallButtonStyle}>Clear</button>
       </div>
       <div style={touchActionGridStyle}>
@@ -3975,6 +4025,69 @@ function TouchActionDrawer({
           </>
         )}
       </div>
+
+      <div style={touchActionSectionStyle}>Tags</div>
+      <div style={touchActionGridStyle}>
+        {CARD_TAG_OPTIONS.filter((tag) => tag !== "Custom").map((tag) => (
+          <button
+            key={`drawer-tag-${tag}`}
+            type="button"
+            onClick={() => onToggleTag?.(tag)}
+            style={{
+              ...touchActionButtonStyle,
+              background: selectedTags.includes(tag) ? "#facc15" : "#374151",
+              color: selectedTags.includes(tag) ? "#111827" : "white"
+            }}
+          >
+            {selectedTags.includes(tag) ? `✓ ${tag}` : tag}
+          </button>
+        ))}
+      </div>
+
+      <div style={touchActionSectionStyle}>Tokens</div>
+      <div style={touchActionGridStyle}>
+        {CARD_TOKEN_OPTIONS.map((token) => (
+          <button
+            key={`drawer-token-${token}`}
+            type="button"
+            onClick={() => selectedTokens.includes(token) ? onRemoveToken?.(token) : onAddToken?.(token)}
+            style={{
+              ...touchActionButtonStyle,
+              background: selectedTokens.includes(token) ? "#7c2d12" : "#374151"
+            }}
+          >
+            {selectedTokens.includes(token) ? `Remove ${token}` : `+ ${token}`}
+          </button>
+        ))}
+      </div>
+
+      {selectedTokens.filter((token) => !CARD_TOKEN_OPTIONS.includes(token)).length > 0 && (
+        <>
+          <div style={touchActionSectionStyle}>Custom Tokens</div>
+          <div style={touchActionGridStyle}>
+            {selectedTokens
+              .filter((token) => !CARD_TOKEN_OPTIONS.includes(token))
+              .map((token) => (
+                <React.Fragment key={`drawer-custom-token-${token}`}>
+                  <button
+                    type="button"
+                    onClick={() => onEditToken?.(token)}
+                    style={{ ...touchActionButtonStyle, background: "#facc15", color: "#111827" }}
+                  >
+                    Edit {token}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onRemoveToken?.(token)}
+                    style={{ ...touchActionButtonStyle, background: "#7c2d12" }}
+                  >
+                    Remove {token}
+                  </button>
+                </React.Fragment>
+              ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -6876,6 +6989,41 @@ const zoneTrayButtonStyle = {
   cursor: "pointer"
 };
 
+
+const ipadMultiSelectHelpStyle = {
+  position: "sticky",
+  top: "74px",
+  zIndex: 79,
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "10px",
+  padding: "10px",
+  margin: "8px 0 12px",
+  border: "2px solid #475569",
+  borderRadius: "16px",
+  boxShadow: "0 12px 28px rgba(0,0,0,0.35)"
+};
+
+const ipadMultiSelectBigButtonStyle = {
+  minHeight: "54px",
+  padding: "12px 18px",
+  borderRadius: "14px",
+  border: "2px solid #bbf7d0",
+  fontWeight: "900",
+  fontSize: "15px",
+  cursor: "pointer"
+};
+
+const ipadMultiSelectHelpTextStyle = {
+  color: "#e5e7eb",
+  fontSize: "13px",
+  fontWeight: "700",
+  maxWidth: "520px",
+  lineHeight: 1.35
+};
+
 const touchActionDrawerStyle = {
   position: "sticky",
   bottom: "8px",
@@ -6925,6 +7073,16 @@ const touchActionSmallButtonStyle = {
   color: "#facc15",
   fontWeight: "bold",
   cursor: "pointer"
+};
+
+const touchActionSectionStyle = {
+  marginTop: 14,
+  marginBottom: 8,
+  color: "#facc15",
+  fontWeight: 800,
+  fontSize: 13,
+  textTransform: "uppercase",
+  letterSpacing: "0.08em"
 };
 
 const zoneTrayOverlayBackdropStyle = {

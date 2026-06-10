@@ -258,6 +258,9 @@ function App() {
   const [isShufflingDeck, setIsShufflingDeck] = useState(false);
   const [revealedHiddenCardKeys, setRevealedHiddenCardKeys] = useState([]);
   const [expandedBoardIds, setExpandedBoardIds] = useState([]);
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+  const [tableScale, setTableScale] = useState(1);
+  const [zoneTrayState, setZoneTrayState] = useState(null);
   const playersRef = useRef(players);
   const gameLogRef = useRef(gameLog);
   const fastSyncTimerRef = useRef(null);
@@ -1850,6 +1853,35 @@ if (selectedTypeFilters.length > 0) {
     }
   }
 
+  async function moveSelectedHandCard(direction) {
+    const me = players[playerId];
+    if (!me || !selectedCardKey) {
+      setMessage("Select a card in your hand first.");
+      return;
+    }
+
+    const currentIndex = (me.hand || []).findIndex((card, index) => cardKey(card, index) === selectedCardKey);
+    if (currentIndex === -1) {
+      setMessage("Select a card in your hand first.");
+      return;
+    }
+
+    const targetIndex = Math.max(0, Math.min((me.hand || []).length - 1, currentIndex + direction));
+    if (targetIndex === currentIndex) return;
+
+    const nextHand = [...me.hand];
+    const [movedCard] = nextHand.splice(currentIndex, 1);
+    nextHand.splice(targetIndex, 0, movedCard);
+
+    await updateMeFast({
+      ...me,
+      hand: nextHand
+    }, "rearranged their hand.");
+
+    setSelectedCard(movedCard);
+    setSelectedCardKey(cardKey(movedCard, targetIndex));
+  }
+
   async function moveSelectedCard(targetZone) {
     if (!selectedCardKey) {
       setMessage("Click one of your cards first.");
@@ -2007,6 +2039,47 @@ if (selectedTypeFilters.length > 0) {
 
     await moveCardByKey(cardContextMenu.key, targetZone);
     closeCardContextMenu();
+  }
+
+  async function sendSelectedCardToInkwellExerted() {
+    const me = players[playerId];
+    if (!me || !selectedCardKey) return;
+
+    const key = selectedCardKey;
+    const found = findCardInZones(me, key);
+    if (!found) return;
+
+    const nextMe = {
+      ...me,
+      hand: removeCardFromZone(me.hand, key),
+      board: removeCardFromZone(me.board, key),
+      inkwell: removeCardFromZone(me.inkwell, key),
+      discard: removeCardFromZone(me.discard, key),
+      boostHolding: removeCardFromZone(me.boostHolding || [], key),
+      exerted: [...new Set([...(me.exerted || []).filter((existingKey) => existingKey !== key), key])],
+      damage: { ...(me.damage || {}) },
+      tags: { ...(me.tags || {}) },
+      tokens: { ...(me.tokens || {}) },
+      attachments: { ...(me.attachments || {}) },
+      boosts: { ...(me.boosts || {}) },
+      boardPositions: { ...(me.boardPositions || {}) }
+    };
+
+    delete nextMe.damage[key];
+    const cleanedMetadata = cleanBoardMetadata(me, key);
+    nextMe.tags = cleanedMetadata.tags;
+    nextMe.tokens = cleanedMetadata.tokens;
+    nextMe.attachments = cleanedMetadata.attachments;
+    nextMe.boosts = cleanedMetadata.boosts;
+    nextMe.boardPositions = cleanedMetadata.boardPositions;
+    nextMe.inkwell = [...(nextMe.inkwell || []), found.card];
+
+    setRevealedHiddenCardKeys((current) => current.filter((revealedKey) => revealedKey !== key));
+    await updateMe(nextMe, `sent ${cardLabel(found.card)} to the inkwell exerted.`);
+    setSelectedCard(found.card);
+    setSelectedCardKey(key);
+    setSelectedMultiCardKeys((keys) => keys.filter((selectedKey) => selectedKey !== key));
+    setMessage(`Sent ${cardLabel(found.card)} to your inkwell face down and exerted.`);
   }
 
   async function sendContextCardToInkwellExerted() {
@@ -2799,20 +2872,42 @@ if (selectedTypeFilters.length > 0) {
                       {player.username}
                     </h3>
                     <p style={boardZoomHintStyle}>
-                      {expandedBoardIds.includes(id)
-                        ? "Right-click again to restore"
-                        : "Right-click board to enlarge"}
+                      {id !== playerId && !expandedBoardIds.includes(id)
+                        ? "Collapsed for iPad. Tap Show Board to view."
+                        : expandedBoardIds.includes(id)
+                          ? "Tap button or right-click again to restore"
+                          : "Right-click board to enlarge"}
                     </p>
 
-                    <MiniCards
-                      cards={player.board}
-                      exertedCards={player.exerted || []}
-                      damage={player.damage || {}}
-                      tags={player.tags || {}}
-                      tokens={player.tokens || {}}
-                      attachments={player.attachments || {}}
-                      boosts={player.boosts || {}}
-                    />
+                    {id !== playerId && !expandedBoardIds.includes(id) ? (
+                      <div style={collapsedOpponentBoardStyle}>
+                        <div><strong>{player.board?.length || 0}</strong> board</div>
+                        <div><strong>{player.hand?.length || 0}</strong> hand</div>
+                        <div><strong>{player.deck?.length || 0}</strong> deck</div>
+                        <div><strong>{player.discard?.length || 0}</strong> discard</div>
+                        <div><strong>{player.inkwell?.length || 0}</strong> inkwell</div>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setExpandedBoardIds((current) => [...new Set([...current, id])]);
+                          }}
+                          style={ipadToolbarButtonStyle}
+                        >
+                          Show Board
+                        </button>
+                      </div>
+                    ) : (
+                      <MiniCards
+                        cards={player.board}
+                        exertedCards={player.exerted || []}
+                        damage={player.damage || {}}
+                        tags={player.tags || {}}
+                        tokens={player.tokens || {}}
+                        attachments={player.attachments || {}}
+                        boosts={player.boosts || {}}
+                      />
+                    )}
 
                     <RevealedCardsPanel
                       cards={(player.revealedCards || []).filter((reveal) =>
@@ -2827,6 +2922,25 @@ if (selectedTypeFilters.length > 0) {
 
           {me && (
             <>
+              <div style={ipadToolbarStyle}>
+                <button
+                  type="button"
+                  onClick={() => setIsMultiSelectMode((current) => !current)}
+                  style={{
+                    ...ipadToolbarButtonStyle,
+                    background: isMultiSelectMode ? "#22c55e" : "#374151",
+                    color: isMultiSelectMode ? "#052e16" : "white"
+                  }}
+                >
+                  {isMultiSelectMode ? "Select Multiple: ON" : "Select Multiple"}
+                </button>
+                <button type="button" onClick={() => setTableScale((value) => Math.max(0.8, Number((value - 0.1).toFixed(1))))} style={ipadToolbarButtonStyle}>− Zoom</button>
+                <strong style={ipadZoomLabelStyle}>{Math.round(tableScale * 100)}%</strong>
+                <button type="button" onClick={() => setTableScale((value) => Math.min(1.3, Number((value + 0.1).toFixed(1))))} style={ipadToolbarButtonStyle}>+ Zoom</button>
+                <button type="button" onClick={() => setTableScale(1)} style={ipadToolbarButtonStyle}>Reset Zoom</button>
+              </div>
+
+              <div style={{ ...tableScaleWrapperStyle, transform: `scale(${tableScale})`, width: `${100 / tableScale}%` }}>
               <div style={gameAreaStyle}>
                 <div style={topPlayRowStyle}>
                   <div style={smallDeckZoneStyle}>
@@ -2884,6 +2998,8 @@ if (selectedTypeFilters.length > 0) {
                     setSelectedMultiCardKeys={setSelectedMultiCardKeys}
                     setSelectedCard={setSelectedCard}
                     setSelectedCardKey={setSelectedCardKey}
+                    isMultiSelectMode={isMultiSelectMode}
+                    onOpenZoneTray={(payload) => setZoneTrayState(payload)}
                     selectedMulliganCards={selectedMulliganCards}
                     onCardClick={(card, key) => {
                       setSelectedCard(card);
@@ -2906,6 +3022,8 @@ if (selectedTypeFilters.length > 0) {
                     setSelectedMultiCardKeys={setSelectedMultiCardKeys}
                     setSelectedCard={setSelectedCard}
                     setSelectedCardKey={setSelectedCardKey}
+                    isMultiSelectMode={isMultiSelectMode}
+                    onOpenZoneTray={(payload) => setZoneTrayState(payload)}
                     exertedCards={me.exerted || []}
                     damage={me.damage || {}}
                     tags={me.tags || {}}
@@ -2932,6 +3050,8 @@ if (selectedTypeFilters.length > 0) {
                     setSelectedMultiCardKeys={setSelectedMultiCardKeys}
                     setSelectedCard={setSelectedCard}
                     setSelectedCardKey={setSelectedCardKey}
+                    isMultiSelectMode={isMultiSelectMode}
+                    onOpenZoneTray={(payload) => setZoneTrayState(payload)}
                     exertedCards={me.exerted || []}
                     onDoubleClickCard={toggleExert}
                     onDropCard={moveCardByKey}
@@ -2949,6 +3069,8 @@ if (selectedTypeFilters.length > 0) {
                     setSelectedMultiCardKeys={setSelectedMultiCardKeys}
                     setSelectedCard={setSelectedCard}
                     setSelectedCardKey={setSelectedCardKey}
+                    isMultiSelectMode={isMultiSelectMode}
+                    onOpenZoneTray={(payload) => setZoneTrayState(payload)}
                     onDropCard={moveCardByKey}
                     onCardContextMenu={openCardContextMenu}
                     onZoneContextMenu={openZoneContextMenu}
@@ -2967,10 +3089,13 @@ if (selectedTypeFilters.length > 0) {
                       setSelectedMultiCardKeys={setSelectedMultiCardKeys}
                       setSelectedCard={setSelectedCard}
                       setSelectedCardKey={setSelectedCardKey}
+                      isMultiSelectMode={isMultiSelectMode}
+                      onOpenZoneTray={(payload) => setZoneTrayState(payload)}
                       onDropCard={moveCardByKey}
                     />
                   )}
                 </div>
+              </div>
               </div>
 
               <p>
@@ -3055,6 +3180,37 @@ if (selectedTypeFilters.length > 0) {
             <p>
               Selected: <strong style={{ color: "#facc15" }}>{cardLabel(selectedCard)}</strong>
             </p>
+          )}
+
+          {selectedCard && me && (
+            <TouchActionDrawer
+              selectedCard={selectedCard}
+              selectedCardKey={selectedCardKey}
+              selectedMultiCardKeys={selectedMultiCardKeys}
+              me={me}
+              onExert={() => toggleExert(selectedCard, selectedMultiCardKeys.includes(selectedCardKey) && selectedMultiCardKeys.length > 1 ? selectedMultiCardKeys : selectedCardKey)}
+              onDamagePlus={() => changeDamage(1)}
+              onDamageMinus={() => changeDamage(-1)}
+              onBanish={() => moveSelectedCard("discard")}
+              onReturnToHand={() => moveSelectedCard("hand")}
+              onInkwellExerted={sendSelectedCardToInkwellExerted}
+              onMoveHandLeft={() => moveSelectedHandCard(-1)}
+              onMoveHandRight={() => moveSelectedHandCard(1)}
+              onClearSelection={() => {
+                setSelectedCard(null);
+                setSelectedCardKey(null);
+                setSelectedMultiCardKeys([]);
+              }}
+            />
+          )}
+
+          {zoneTrayState && me && (
+            <ZoneTrayOverlay
+              title={zoneTrayState.title}
+              zoneName={zoneTrayState.zoneName}
+              cards={zoneTrayState.cards || []}
+              onClose={() => setZoneTrayState(null)}
+            />
           )}
 
           {message && <p>{message}</p>}
@@ -3778,6 +3934,80 @@ function CardVisual({
 }
 
 
+
+function TouchActionDrawer({
+  selectedCard,
+  selectedCardKey,
+  selectedMultiCardKeys = [],
+  me,
+  onExert,
+  onDamagePlus,
+  onDamageMinus,
+  onBanish,
+  onReturnToHand,
+  onInkwellExerted,
+  onMoveHandLeft,
+  onMoveHandRight,
+  onClearSelection
+}) {
+  const selectedCount = selectedMultiCardKeys.includes(selectedCardKey) && selectedMultiCardKeys.length > 1
+    ? selectedMultiCardKeys.length
+    : 1;
+  const selectedIsInHand = (me.hand || []).some((card, index) => cardKey(card, index) === selectedCardKey);
+
+  return (
+    <div style={touchActionDrawerStyle}>
+      <div style={touchActionDrawerHeaderStyle}>
+        <strong>{selectedCount > 1 ? `${selectedCount} selected cards` : cardLabel(selectedCard)}</strong>
+        <button type="button" onClick={onClearSelection} style={touchActionSmallButtonStyle}>Clear</button>
+      </div>
+      <div style={touchActionGridStyle}>
+        <button type="button" onClick={onExert} style={touchActionButtonStyle}>Exert / Ready</button>
+        <button type="button" onClick={onDamagePlus} style={touchActionButtonStyle}>Damage +</button>
+        <button type="button" onClick={onDamageMinus} style={touchActionButtonStyle}>Damage −</button>
+        <button type="button" onClick={onBanish} style={{ ...touchActionButtonStyle, background: "#7f1d1d" }}>Banish</button>
+        <button type="button" onClick={onReturnToHand} style={{ ...touchActionButtonStyle, background: "#1d4ed8" }}>Return to Hand</button>
+        <button type="button" onClick={onInkwellExerted} style={{ ...touchActionButtonStyle, background: "#0f766e" }}>Inkwell Exerted</button>
+        {selectedIsInHand && (
+          <>
+            <button type="button" onClick={onMoveHandLeft} style={touchActionButtonStyle}>Hand ←</button>
+            <button type="button" onClick={onMoveHandRight} style={touchActionButtonStyle}>Hand →</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ZoneTrayOverlay({ title, zoneName, cards = [], onClose }) {
+  return createPortal(
+    <div style={zoneTrayOverlayBackdropStyle} onClick={onClose}>
+      <div style={zoneTrayOverlayStyle} onClick={(event) => event.stopPropagation()}>
+        <div style={zoneTrayHeaderStyle}>
+          <h2 style={{ margin: 0 }}>{title} — {cards.length} card(s)</h2>
+          <button type="button" onClick={onClose} style={touchActionSmallButtonStyle}>Close</button>
+        </div>
+        <div style={zoneTrayCardGridStyle}>
+          {cards.length === 0 ? (
+            <p style={helperTextStyle}>No cards here.</p>
+          ) : cards.map((card, index) => (
+            <div key={`${zoneName}-tray-${cardKey(card, index)}`} style={zoneTrayCardShellStyle}>
+              <CardVisual
+                card={card}
+                faceDown={zoneName === "inkwell"}
+                isRotated={false}
+                isLocation={false}
+                forcePortraitHover
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function CardContextMenu({
   menu,
   tags = {},
@@ -4481,7 +4711,9 @@ function Zone({
   tokens = {},
   attachments = {},
   boosts = {},
-  boardPositions = {}
+  boardPositions = {},
+  isMultiSelectMode = false,
+  onOpenZoneTray
 }) {
   const isInkwellZone = zoneName === "inkwell";
   const isDiscardZone = zoneName === "discard";
@@ -4749,6 +4981,19 @@ function Zone({
           }
 
           if (event.detail > 1) return;
+
+          if (isMultiSelectMode) {
+            event.preventDefault();
+            event.stopPropagation();
+            setSelectedCard(card);
+            setSelectedCardKey(key);
+            setSelectedMultiCardKeys?.((current) =>
+              current.includes(key)
+                ? current.filter((existingKey) => existingKey !== key)
+                : [...current, key]
+            );
+            return;
+          }
 
           if (event.shiftKey) {
             event.preventDefault();
@@ -5036,12 +5281,24 @@ function Zone({
         }
       }}
     >
-      <h2>{title}</h2>
+      <div style={zoneHeaderRowStyle}>
+        <h2 style={{ margin: 0 }}>{title}</h2>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenZoneTray?.({ title, zoneName, cards });
+          }}
+          style={zoneTrayButtonStyle}
+        >
+          Open Tray
+        </button>
+      </div>
       <p>{cards.length} card(s)</p>
       <p style={helperTextStyle}>
         {isInkwellZone
-          ? "Face down. Double-click to exert/ready. Right-click or long-press to reveal/unreveal. Shift-click to multi-select."
-          : "Drag cards here to move them to this zone. Shift-click to multi-select. Right-click or long-press for card tools."}
+          ? "Face down. Double-click to exert/ready. Right-click or long-press to reveal/unreveal. Shift-click or use Select Multiple mode to multi-select."
+          : "Drag cards here to move them to this zone. Shift-click or use Select Multiple mode to multi-select. Right-click or long-press for card tools."}
       </p>
 
       <div
@@ -5220,7 +5477,8 @@ const contextMenuStyle = {
 };
 
 const contextMenuButtonStyle = {
-  padding: "7px 9px",
+  minHeight: "44px",
+  padding: "10px 12px",
   borderRadius: "8px",
   border: "1px solid #374151",
   background: "#374151",
@@ -5525,7 +5783,7 @@ const gameAreaStyle = {
 
 const topPlayRowStyle = {
   display: "grid",
-  gridTemplateColumns: "150px minmax(650px, 1.45fr) minmax(620px, 1.35fr)",
+  gridTemplateColumns: "170px minmax(700px, 1.45fr) minmax(680px, 1.35fr)",
   gap: "12px",
   alignItems: "stretch",
   width: "100%"
@@ -5533,7 +5791,7 @@ const topPlayRowStyle = {
 
 const bottomPlayRowStyle = {
   display: "grid",
-  gridTemplateColumns: "minmax(420px, 0.95fr) minmax(520px, 1.25fr) minmax(280px, 0.75fr)",
+  gridTemplateColumns: "minmax(520px, 0.95fr) minmax(620px, 1.25fr) minmax(340px, 0.75fr)",
   gap: "12px",
   alignItems: "start",
   width: "100%"
@@ -5561,8 +5819,8 @@ const compactZoneTitleStyle = {
 };
 
 const smallDeckPileStyle = {
-  width: "72px",
-  minHeight: "106px",
+  width: "92px",
+  minHeight: "128px",
   borderRadius: "10px",
   background: "#111827",
   color: "white",
@@ -5583,7 +5841,8 @@ const deckActionStackStyle = {
 };
 
 const deckActionButtonStyle = {
-  padding: "7px 8px",
+  minHeight: "44px",
+  padding: "10px 10px",
   borderRadius: "8px",
   border: "1px solid #374151",
   background: "#1f2937",
@@ -5618,8 +5877,8 @@ const dragSelectBoxStyle = {
 };
 
 const handCardStyle = {
-  width: "145px",
-  minHeight: "200px",
+  width: "160px",
+  minHeight: "220px",
   borderRadius: "12px",
   background: "#1f2937",
   color: "white",
@@ -5656,8 +5915,8 @@ const inkwellCardRowStyle = {
 };
 
 const inkwellCardStyle = {
-  width: "70px",
-  minHeight: "98px",
+  width: "82px",
+  minHeight: "114px",
   borderRadius: "10px",
   background: "#1f2937",
   color: "white",
@@ -5677,8 +5936,8 @@ const inkwellExertedCardShellStyle = {
 };
 
 const discardCardStyle = {
-  width: "70px",
-  minHeight: "98px",
+  width: "82px",
+  minHeight: "114px",
   borderRadius: "10px",
   background: "#1f2937",
   color: "white",
@@ -5700,8 +5959,8 @@ const actionButtonBarStyle = {
 
 const zoneStyle = {
   border: "1px solid #374151",
-  borderRadius: "12px",
-  padding: "10px",
+  borderRadius: "14px",
+  padding: "14px",
   background: "#020617",
   minHeight: "120px",
   minWidth: 0,
@@ -5779,8 +6038,8 @@ const discardCardRowStyle = {
 };
 
 const cardStyle = {
-  width: "130px",
-  minHeight: "180px",
+  width: "145px",
+  minHeight: "200px",
   borderRadius: "12px",
   background: "#1f2937",
   color: "white",
@@ -6546,3 +6805,169 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     <App />
   </React.StrictMode>
 );
+const ipadToolbarStyle = {
+  position: "sticky",
+  top: "0px",
+  zIndex: 80,
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "8px",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "10px",
+  margin: "10px 0",
+  border: "1px solid #334155",
+  borderRadius: "14px",
+  background: "rgba(2, 6, 23, 0.96)",
+  boxShadow: "0 10px 30px rgba(0,0,0,0.35)"
+};
+
+const ipadToolbarButtonStyle = {
+  minHeight: "44px",
+  padding: "10px 14px",
+  borderRadius: "12px",
+  border: "1px solid #475569",
+  background: "#374151",
+  color: "white",
+  fontWeight: "bold",
+  cursor: "pointer"
+};
+
+const ipadZoomLabelStyle = {
+  color: "#facc15",
+  minWidth: "52px",
+  textAlign: "center"
+};
+
+const tableScaleWrapperStyle = {
+  transformOrigin: "top left",
+  transition: "transform 120ms ease"
+};
+
+const collapsedOpponentBoardStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(84px, 1fr))",
+  gap: "8px",
+  alignItems: "center",
+  border: "1px dashed #475569",
+  borderRadius: "12px",
+  padding: "12px",
+  background: "#020617",
+  color: "#e5e7eb",
+  minHeight: "110px"
+};
+
+const zoneHeaderRowStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "10px",
+  flexWrap: "wrap"
+};
+
+const zoneTrayButtonStyle = {
+  minHeight: "38px",
+  padding: "8px 12px",
+  borderRadius: "10px",
+  border: "1px solid #38bdf8",
+  background: "#0f172a",
+  color: "#e0f2fe",
+  fontWeight: "bold",
+  cursor: "pointer"
+};
+
+const touchActionDrawerStyle = {
+  position: "sticky",
+  bottom: "8px",
+  zIndex: 90,
+  margin: "14px auto",
+  maxWidth: "980px",
+  border: "2px solid #38bdf8",
+  borderRadius: "18px",
+  padding: "12px",
+  background: "rgba(2, 6, 23, 0.98)",
+  boxShadow: "0 18px 50px rgba(0,0,0,0.55)",
+  textAlign: "left"
+};
+
+const touchActionDrawerHeaderStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: "10px",
+  marginBottom: "10px",
+  color: "#facc15"
+};
+
+const touchActionGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(132px, 1fr))",
+  gap: "8px"
+};
+
+const touchActionButtonStyle = {
+  minHeight: "48px",
+  borderRadius: "12px",
+  border: "1px solid #475569",
+  background: "#374151",
+  color: "white",
+  fontWeight: "bold",
+  cursor: "pointer",
+  padding: "10px"
+};
+
+const touchActionSmallButtonStyle = {
+  minHeight: "40px",
+  padding: "8px 12px",
+  borderRadius: "999px",
+  border: "1px solid #facc15",
+  background: "#020617",
+  color: "#facc15",
+  fontWeight: "bold",
+  cursor: "pointer"
+};
+
+const zoneTrayOverlayBackdropStyle = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 200,
+  background: "rgba(2, 6, 23, 0.78)",
+  display: "grid",
+  placeItems: "center",
+  padding: "18px"
+};
+
+const zoneTrayOverlayStyle = {
+  width: "min(96vw, 1100px)",
+  maxHeight: "88vh",
+  overflow: "auto",
+  border: "2px solid #38bdf8",
+  borderRadius: "18px",
+  background: "#020617",
+  color: "white",
+  padding: "16px",
+  boxShadow: "0 24px 80px rgba(0,0,0,0.75)"
+};
+
+const zoneTrayHeaderStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "12px",
+  marginBottom: "14px"
+};
+
+const zoneTrayCardGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
+  gap: "14px",
+  alignItems: "start"
+};
+
+const zoneTrayCardShellStyle = {
+  border: "1px solid #334155",
+  borderRadius: "14px",
+  background: "#111827",
+  padding: "8px",
+  overflow: "visible"
+};

@@ -1201,6 +1201,35 @@ if (selectedTypeFilters.length > 0) {
     setCardContextMenu(null);
   }
 
+  useEffect(() => {
+    if (!cardContextMenu) return;
+
+    function closeMenuFromOutsidePointer(event) {
+      if (event.button === 2) return;
+
+      const target = event.target;
+      if (target?.closest?.("[data-card-context-menu='true']")) {
+        return;
+      }
+
+      setCardContextMenu(null);
+    }
+
+    function closeMenuFromEscape(event) {
+      if (event.key === "Escape") {
+        setCardContextMenu(null);
+      }
+    }
+
+    document.addEventListener("pointerdown", closeMenuFromOutsidePointer, true);
+    document.addEventListener("keydown", closeMenuFromEscape, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", closeMenuFromOutsidePointer, true);
+      document.removeEventListener("keydown", closeMenuFromEscape, true);
+    };
+  }, [cardContextMenu]);
+
   function openDeckContextMenu(event) {
     event.preventDefault();
     event.stopPropagation();
@@ -3789,6 +3818,7 @@ function CardContextMenu({
   if (menu.kind === "deck") {
     return (
       <div
+        data-card-context-menu="true"
         style={{
           ...contextMenuStyle,
           left: Math.max(8, Math.min(menu.x, window.innerWidth - 288)),
@@ -3821,6 +3851,7 @@ function CardContextMenu({
 
     return (
       <div
+        data-card-context-menu="true"
         style={{
           ...contextMenuStyle,
           left: Math.max(8, Math.min(menu.x, window.innerWidth - 288)),
@@ -3843,6 +3874,7 @@ function CardContextMenu({
 
   return (
     <div
+      data-card-context-menu="true"
       style={{
         ...contextMenuStyle,
         left: Math.max(8, Math.min(menu.x, window.innerWidth - 288)),
@@ -4376,7 +4408,6 @@ function MiniCards({ cards, exertedCards = [], damage = {}, tags = {}, tokens = 
     <div style={miniBoardLayoutStyle}>
       {unassignedEntries.length > 0 && (
         <div style={miniBoardSectionStyle}>
-          <div style={miniBoardSectionTitleStyle}>Unassigned</div>
           <div style={miniCardGroupRowStyle}>
             {unassignedEntries.map((entry) => renderMiniCluster(entry))}
           </div>
@@ -4924,7 +4955,6 @@ function Zone({
       <div style={yourBoardStructuredLayoutStyle}>
         {unassignedEntries.length > 0 && (
           <div style={yourBoardSectionStyle}>
-            <div style={yourBoardSectionTitleStyle}>Unassigned</div>
             <div style={yourBoardCardGroupRowStyle}>
               {unassignedEntries.map((entry) => renderBoardCluster(entry))}
             </div>
